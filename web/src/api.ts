@@ -5,10 +5,11 @@ export const CLASSES: DamageClass[] = ["no-damage", "minor-damage", "major-damag
 export const CLASS_LABEL: Record<DamageClass, string> = {
   "no-damage": "No damage", "minor-damage": "Minor", "major-damage": "Major", destroyed: "Destroyed",
 };
+// Ordinal damage ramp; the only saturated colours in the UI (kept in sync with styles.css).
 export const CLASS_COLOUR: Record<DamageClass, string> = {
-  "no-damage": "#34D399", "minor-damage": "#FACC15", "major-damage": "#FB923C", destroyed: "#EF4444",
+  "no-damage": "#3F8F5F", "minor-damage": "#D9A520", "major-damage": "#D9622B", destroyed: "#B3261E",
 };
-export const NOT_DETECTED_COLOUR = "#94A3B8";
+export const NOT_DETECTED_COLOUR = "#8F8C84";
 
 export interface ModelInfo { id: string; label: string; kind: "classifier" | "unet"; run: string }
 
@@ -73,3 +74,8 @@ export const api = {
 };
 
 export const pct = (x: number | undefined, d = 0) => (x === undefined ? "–" : `${(x * 100).toFixed(d)}%`);
+
+/** "hurricane-harvey" -> "Hurricane Harvey" */
+export const titleCase = (s: string) => s.split("-").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+/** "hurricane-harvey_00000149" -> "00000149" */
+export const tileNo = (pairId: string) => pairId.split("_").pop() ?? pairId;

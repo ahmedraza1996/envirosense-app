@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import { api, Assessment, ModelInfo, Scene } from "./api";
+import { api, Assessment, ModelInfo, Scene, tileNo, titleCase } from "./api";
 import ScenePanel from "./components/ScenePanel";
 import DamageMap, { MapOptions } from "./components/DamageMap";
 import SummaryPanel from "./components/SummaryPanel";
 import BuildingInspector from "./components/BuildingInspector";
 
-export type Focus = { x: number; y: number; zoom: number; key: string } | null;
+export type Focus = { x: number; y: number; zoom: number; key: number } | null;
 
 export default function App() {
   const [models, setModels] = useState<ModelInfo[]>([]);
@@ -18,7 +18,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [focus, setFocus] = useState<Focus>(null);
-  const [opts, setOpts] = useState<MapOptions>({ phase: "post", showTruth: false, errorsOnly: false, showZones: true, damageMap: false });
+  const [opts, setOpts] = useState<MapOptions>({ phase: "post", damage: true, compare: false, mismatches: false, zones: true, pixelMap: false });
 
   useEffect(() => {
     Promise.all([api.models(), api.scenes("hold")])
@@ -26,8 +26,8 @@ export default function App() {
         setModels(m);
         setScenes(s.scenes);
         setDisasters(s.disasters);
-        const demo = [...s.scenes].sort((a, b) => b.severe_true - a.severe_true)[0];
-        if (demo) setSceneId(demo.pair_id);
+        const first = [...s.scenes].sort((a, b) => b.severe_true - a.severe_true)[0];
+        if (first) setSceneId(first.pair_id);
       })
       .catch((e) => setError(String(e)));
   }, []);
@@ -39,48 +39,48 @@ export default function App() {
     setError(null);
     setSelected(null);
     api.assess(sceneId, modelId)
-      .then((a) => { if (!cancelled) { setAssessment(a); setOpts((o) => ({ ...o, damageMap: o.damageMap && a.has_damage_map })); } })
+      .then((a) => { if (!cancelled) { setAssessment(a); setOpts((o) => ({ ...o, pixelMap: o.pixelMap && a.has_damage_map })); } })
       .catch((e) => { if (!cancelled) setError(String(e)); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [sceneId, modelId]);
 
-  const building = useMemo(
-    () => assessment?.features.find((f) => f.id === selected) ?? null,
-    [assessment, selected],
-  );
-  const model = models.find((m) => m.id === modelId);
+  const building = useMemo(() => assessment?.features.find((f) => f.id === selected) ?? null, [assessment, selected]);
 
   return (
     <div className="app">
-      <div className="top">
-        <div className="brand"><span className="logo" />EnviroSense · damage assessment</div>
-        <div className="sep" />
-        {model && <span className="chip acc">Model <b>{model.label}</b></span>}
-        {assessment && <span className="chip">Scene <b>{assessment.scene.disaster}</b>&nbsp;{assessment.pair_id.split("_").pop()}</span>}
-        <div className="grow" />
-        <span className="chip amb">xBD hold split · tiles unseen in training</span>
-      </div>
+      <header className="header">
+        <span className="wordmark">EnviroSense</span>
+        <nav className="crumbs" aria-label="Location">
+          <span>xBD hold set</span>
+          {assessment && (<><span className="slash">/</span><span>{titleCase(assessment.scene.disaster)}</span>
+            <span className="slash">/</span><span>Tile {tileNo(assessment.pair_id)}</span></>)}
+        </nav>
+        <div className="spacer" />
+        <label className="field-inline">
+          Model
+          <select value={modelId} onChange={(e) => setModelId(e.target.value)} aria-label="Model">
+            {models.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
+          </select>
+        </label>
+      </header>
       <div className="body">
-        <ScenePanel
-          models={models} modelId={modelId} onModel={setModelId}
-          scenes={scenes} disasters={disasters} sceneId={sceneId} onScene={setSceneId}
-        />
+        <ScenePanel scenes={scenes} disasters={disasters} sceneId={sceneId} onScene={setSceneId} />
         <DamageMap
           assessment={assessment} loading={loading} error={error} options={opts} onOptions={setOpts}
           selected={selected} onSelect={setSelected} focus={focus}
         />
-        <div className="panel r">
+        <aside className="detail">
           {building && assessment ? (
             <BuildingInspector assessment={assessment} feature={building} onBack={() => setSelected(null)} />
           ) : (
             <SummaryPanel
               assessment={assessment} loading={loading}
-              onZone={(z) => setFocus({ x: z.centroid_px[0], y: z.centroid_px[1], zoom: 1, key: z.zone_id + Date.now() })}
-              onBuilding={(id) => setSelected(id)}
+              onZone={(z) => setFocus({ x: z.centroid_px[0], y: z.centroid_px[1], zoom: 1, key: Date.now() })}
+              onBuilding={setSelected}
             />
           )}
-        </div>
+        </aside>
       </div>
     </div>
   );

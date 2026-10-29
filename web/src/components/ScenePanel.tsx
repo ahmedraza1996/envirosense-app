@@ -1,64 +1,55 @@
 import { useMemo, useState } from "react";
-import { CLASS_COLOUR, ModelInfo, Scene } from "../api";
+import { CLASS_COLOUR, Scene, tileNo, titleCase } from "../api";
 
-interface Props {
-  models: ModelInfo[]; modelId: string; onModel: (id: string) => void;
-  scenes: Scene[]; disasters: string[]; sceneId: string | null; onScene: (id: string) => void;
-}
+interface Props { scenes: Scene[]; disasters: string[]; sceneId: string | null; onScene: (id: string) => void }
 
-export default function ScenePanel({ models, modelId, onModel, scenes, disasters, sceneId, onScene }: Props) {
+const SORTS = { severe: "By damage", buildings: "By size", tile: "By tile" } as const;
+type Sort = keyof typeof SORTS;
+
+export default function ScenePanel({ scenes, disasters, sceneId, onScene }: Props) {
+  const [query, setQuery] = useState("");
   const [disaster, setDisaster] = useState("");
-  const [sort, setSort] = useState<"severe" | "buildings" | "name">("severe");
+  const [sort, setSort] = useState<Sort>("severe");
+
   const list = useMemo(() => {
-    const s = scenes.filter((x) => !disaster || x.disaster === disaster);
-    const key = { severe: (x: Scene) => -x.severe_true, buildings: (x: Scene) => -x.buildings, name: () => 0 }[sort];
-    return [...s].sort((a, b) => key(a) - key(b) || a.pair_id.localeCompare(b.pair_id));
-  }, [scenes, disaster, sort]);
+    const q = query.trim().toLowerCase();
+    const s = scenes.filter((x) => (!disaster || x.disaster === disaster) && (!q || x.pair_id.toLowerCase().includes(q)));
+    const key: Record<Sort, (x: Scene) => number> = { severe: (x) => -x.severe_true, buildings: (x) => -x.buildings, tile: () => 0 };
+    return [...s].sort((a, b) => key[sort](a) - key[sort](b) || a.pair_id.localeCompare(b.pair_id));
+  }, [scenes, query, disaster, sort]);
 
   return (
-    <div className="panel">
-      <div className="ph"><h2>Scenes</h2><div className="sub">xBD hold split · {scenes.length} scenes with buildings</div></div>
-      <div className="sec">
-        <div className="lbl">Model</div>
-        <select value={modelId} onChange={(e) => onModel(e.target.value)}>
-          {models.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
-        </select>
-        <div className="note" style={{ marginTop: 6 }}>
-          Crop classifiers grade each annotated building; U-Nets map damage over the whole image.
+    <nav className="sidebar" aria-label="Scenes">
+      <div className="sidebar-head">
+        <input type="search" placeholder="Search tiles" value={query} onChange={(e) => setQuery(e.target.value)} aria-label="Search tiles" />
+        <div className="row">
+          <select value={disaster} onChange={(e) => setDisaster(e.target.value)} aria-label="Disaster">
+            <option value="">All disasters</option>
+            {disasters.map((d) => <option key={d} value={d}>{titleCase(d)}</option>)}
+          </select>
+          <select value={sort} onChange={(e) => setSort(e.target.value as Sort)} aria-label="Sort">
+            {Object.entries(SORTS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+          </select>
         </div>
+        <span className="count">{list.length} of {scenes.length} tiles</span>
       </div>
-      <div className="sec">
-        <div className="lbl">Disaster</div>
-        <select value={disaster} onChange={(e) => setDisaster(e.target.value)}>
-          <option value="">All disasters</option>
-          {disasters.map((d) => <option key={d} value={d}>{d}</option>)}
-        </select>
-        <div className="between" style={{ marginTop: 8 }}>
-          <span className="dim">Sort</span>
-          <div className="seg">
-            {(["severe", "buildings", "name"] as const).map((k) => (
-              <button key={k} className={`btn ${sort === k ? "on" : ""}`} onClick={() => setSort(k)}>{k}</button>
-            ))}
-          </div>
-        </div>
-      </div>
-      <ul className="scenes">
-        {list.map((s) => {
-          const tot = s.buildings || 1;
-          return (
-            <li key={s.pair_id} className={s.pair_id === sceneId ? "sel" : ""} onClick={() => onScene(s.pair_id)}>
-              <div className="between">
-                <span className="name">{s.pair_id}</span>
-                <span className="dim">{s.buildings}</span>
-              </div>
-              <div className="bar" title="True damage mix (xBD labels)">
-                {([["no-damage", s.true_none], ["minor-damage", s.true_minor], ["major-damage", s.true_major], ["destroyed", s.true_destroyed]] as const)
-                  .map(([c, v]) => <span key={c} style={{ flex: v / tot, background: CLASS_COLOUR[c] }} />)}
-              </div>
-            </li>
-          );
-        })}
+      <ul className="scene-list" role="listbox">
+        {list.map((s) => (
+          <li key={s.pair_id} role="option" aria-selected={s.pair_id === sceneId} onClick={() => onScene(s.pair_id)}>
+            <div className="scene-title">
+              <strong>{titleCase(s.disaster)}</strong>
+              <span className="subtle">{s.buildings}</span>
+            </div>
+            <span className="scene-id">Tile {tileNo(s.pair_id)}</span>
+            <div className="mix" title="Damage mix in the xBD labels">
+              <span style={{ flex: s.true_none, background: CLASS_COLOUR["no-damage"] }} />
+              <span style={{ flex: s.true_minor, background: CLASS_COLOUR["minor-damage"] }} />
+              <span style={{ flex: s.true_major, background: CLASS_COLOUR["major-damage"] }} />
+              <span style={{ flex: s.true_destroyed, background: CLASS_COLOUR.destroyed }} />
+            </div>
+          </li>
+        ))}
       </ul>
-    </div>
+    </nav>
   );
 }

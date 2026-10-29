@@ -15,7 +15,7 @@ from .engines import LABEL_IDS, REVIEW_CONFIDENCE, ROOT, XBD, class_name, discov
 from .scenes import CACHE, pixel_size_m, scene
 
 STORE = ROOT / "runs" / "app" / "assessments"
-COLOURS = {1: (52, 211, 153), 2: (250, 204, 21), 3: (251, 146, 60), 4: (239, 68, 68)}  # deck palette, RGB
+COLOURS = {1: (63, 143, 95), 2: (217, 165, 32), 3: (217, 98, 43), 4: (179, 38, 30)}  # UI damage ramp, RGB
 _engines, _lock = {}, threading.Lock()
 
 
@@ -108,7 +108,7 @@ def building_crop(pair_id: str, uid: str, phase: str, size: int = 256) -> bytes:
         s = size / w
         for p in polys:
             pts = np.round((np.asarray(p.exterior.coords) - (x, y)) * s).astype(np.int32)
-            cv2.polylines(patch, [pts], True, (56, 189, 248), 2)
+            cv2.polylines(patch, [pts], True, (255, 255, 255), 2)
         out.parent.mkdir(parents=True, exist_ok=True)
         cv2.imwrite(str(out), cv2.cvtColor(patch, cv2.COLOR_RGB2BGR))
     return out.read_bytes()
