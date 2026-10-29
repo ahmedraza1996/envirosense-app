@@ -5,11 +5,11 @@
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import service
+from . import report, service
 from .scenes import catalogue, image_jpeg, scene
 
 app = FastAPI(title="EnviroSense damage assessment", version="0.1")
@@ -109,6 +109,32 @@ def get_crop(pair_id: str, uid: str, phase: str):
         return Response(service.building_crop(pair_id, uid, phase), media_type="image/png")
     except StopIteration:
         raise HTTPException(404, f"no building {uid} in {pair_id}")
+
+
+def report_or_404(fn, aid):
+    try:
+        return fn(aid)
+    except FileNotFoundError:
+        raise HTTPException(404, f"no assessment {aid}; POST /api/assess first")
+    except report.ReportError as e:  # internal inconsistency: never publish a report whose numbers don't add up
+        raise HTTPException(500, str(e))
+
+
+@app.get("/api/assessments/{aid}/report.md", response_class=PlainTextResponse)
+def get_report_md(aid: str):
+    text = report_or_404(report.markdown, aid)
+    return PlainTextResponse(text, media_type="text/markdown",
+                             headers={"Content-Disposition": f'attachment; filename="sitrep_{aid}.md"'})
+
+
+@app.get("/api/assessments/{aid}/report.html", response_class=HTMLResponse)
+def get_report_html(aid: str):
+    return HTMLResponse(report_or_404(report.to_html, aid))
+
+
+@app.get("/api/assessments/{aid}/report-map.png")
+def get_report_map(aid: str):
+    return Response(report_or_404(report.map_png, aid), media_type="image/png")
 
 
 if WEB.exists():  # React build; the API routes above take precedence

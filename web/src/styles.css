@@ -88,6 +88,8 @@ select:focus, input[type="search"]:focus { border-color: var(--accent); box-shad
 .detail h1 { font-size: 17px; font-weight: 600; letter-spacing: -0.01em; }
 .detail h2 { font-size: 13px; font-weight: 600; margin-bottom: 10px; }
 .meta { color: var(--ink-3); font-size: 12px; margin-top: 2px; }
+.actions { display: flex; align-items: center; gap: 14px; margin-top: 12px; }
+a.button { text-decoration: none; } a.link { text-decoration: none; }
 .headline { display: flex; align-items: baseline; gap: 10px; }
 .headline .value { font-size: 32px; font-weight: 600; letter-spacing: -0.02em; line-height: 1.1; }
 .headline .text { color: var(--ink-2); }

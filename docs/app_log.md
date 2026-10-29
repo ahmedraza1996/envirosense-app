@@ -38,3 +38,36 @@ and open http://localhost:8000. Queued after E12 by `app/scripts/next_app.sh` (p
 
 **Known limits:** probabilities are uncalibrated; the review threshold (0.6) is a placeholder; demo scenes come from
 xBD hold tiles (unseen tiles, but the same events as training); no report export, review queue, routing or agents yet.
+
+## A02 UI redesign (2026-10-29)
+
+**Why:** the first UI read as generic AI output: a dark navy and cyan theme, a row of status chips, uppercase
+eyebrow labels on every section, a side-tab accent on the selected row, six equal-weight KPI cards, floating
+button clusters on the map and permanent labels on every zone. Impeccable's published anti-pattern list was used as
+the checklist (the plugin itself is not installed here).
+
+**Change:** light, neutral, map-first layout; saturated colour only for damage data (muted green, amber, orange,
+red ramp). Header reduced to a breadcrumb and the model picker. Scene list: search, disaster filter, sort, plain rows.
+Right panel: one headline figure (buildings with major damage or destroyed), one distribution bar, a plain class
+table, priority areas as a ranked table, agreement with xBD as a few figures and a shaded confusion matrix. Map:
+Before/After switch and a single Layers menu; only the five highest-priority areas are outlined and numbered.
+Checked in the browser at 1440 × 900 on Santa Rosa and Harvey tiles.
+
+## A03 Situation report (2026-10-29)
+
+**What:** one-click report per assessment, `api/report.py`. Formats: printable HTML (A4, "Print or save as PDF"),
+Markdown download, and a map figure (after image with assessed damage and the five priority areas numbered).
+Routes: `/api/assessments/{id}/report.html`, `/report.md`, `/report-map.png`. "Situation report" and "Markdown"
+actions at the top of the summary panel.
+
+**Content:** draft status (analyst review required before external use), a summary built only from the numbers,
+area and imagery (tile extent, centre, dates, pixel size), damage by building, priority areas with centre
+coordinates, isolated severe buildings (first 10), buildings needing review (lowest confidence first, first 15),
+method and limits (model, run, checkpoint, epoch, commit; uncalibrated scores; imagery-only damage classes; no road,
+casualty or population information; agreement with xBD where labels exist).
+
+**Safeguards:** every figure comes from the stored assessment; the report refuses to render (HTTP 500) if class
+counts do not add up to the building total; small non-zero shares show as "<1%".
+
+**Verification:** `tests/test_report.py` (numbers match the record, inconsistent counts refused, all three routes
+render); 8 backend tests pass; report checked in the browser for Harvey tile 00000149.

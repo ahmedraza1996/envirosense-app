@@ -71,6 +71,7 @@ export const api = {
   imageUrl: (pair_id: string, phase: "pre" | "post") => `/api/scenes/${pair_id}/image/${phase}`,
   cropUrl: (pair_id: string, uid: string, phase: "pre" | "post") => `/api/scenes/${pair_id}/buildings/${uid}/crop/${phase}`,
   damageMapUrl: (id: string) => `/api/assessments/${id}/damage-map`,
+  reportUrl: (id: string, fmt: "html" | "md") => `/api/assessments/${id}/report.${fmt}`,
 };
 
 export const pct = (x: number | undefined, d = 0) => (x === undefined ? "–" : `${(x * 100).toFixed(d)}%`);
