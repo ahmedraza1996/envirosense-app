@@ -10,7 +10,7 @@ import type { MapOptions } from "./DamageMap";
 
 type GT = number[];
 const toLatLng = (gt: GT, x: number, y: number) => L.latLng(gt[3] + x * gt[4] + y * gt[5], gt[0] + x * gt[1] + y * gt[2]);
-const tileBounds = (gt: GT, size: number) => L.latLngBounds(toLatLng(gt, 0, 0), toLatLng(gt, size, size));
+const tileBounds = (gt: GT, w: number, h: number) => L.latLngBounds(toLatLng(gt, 0, 0), toLatLng(gt, w, h));
 
 interface Props {
   assessment: Assessment; gt: GT; options: MapOptions; selected: string | null; onSelect: (id: string) => void;
@@ -48,16 +48,17 @@ function Areas({ assessment, gt, mode }: { assessment: Assessment; gt: GT; mode:
   return null;
 }
 
-function Controller({ gt, size, focus, pairId }: { gt: GT; size: number; focus: Focus; pairId: string }) {
+function Controller({ bounds, gt, focus, pairId }: { bounds: L.LatLngBounds; gt: GT; focus: Focus; pairId: string }) {
   const map = useMap();
-  useEffect(() => { map.fitBounds(tileBounds(gt, size), { padding: [24, 24] }); }, [map, pairId]);
+  useEffect(() => { map.fitBounds(bounds, { padding: [24, 24] }); }, [map, pairId]);
   useEffect(() => { if (focus) map.flyTo(toLatLng(gt, focus.x, focus.y), 18, { duration: 0.5 }); }, [map, focus, gt]);
   return null;
 }
 
 export default function GeoMap({ assessment, gt, options, selected, onSelect, focus, mode, scenes, onScene }: Props) {
-  const size = assessment.scene.size_px ?? 1024;
-  const bounds = tileBounds(gt, size);
+  const w = assessment.scene.width_px ?? assessment.scene.size_px ?? 1024;
+  const h = assessment.scene.height_px ?? assessment.scene.size_px ?? 1024;
+  const bounds = tileBounds(gt, w, h);
   return (
     <MapContainer bounds={bounds} maxZoom={20} zoomSnap={0.5} preferCanvas style={{ height: "100%" }}>
       <TileLayer url="https://tile.openstreetmap.org/{z}/{x}/{y}.png" maxNativeZoom={19} maxZoom={20}
@@ -76,7 +77,7 @@ export default function GeoMap({ assessment, gt, options, selected, onSelect, fo
           </CircleMarker>
         );
       })}
-      <Controller gt={gt} size={size} focus={focus} pairId={assessment.pair_id} />
+      <Controller bounds={bounds} gt={gt} focus={focus} pairId={assessment.pair_id} />
     </MapContainer>
   );
 }

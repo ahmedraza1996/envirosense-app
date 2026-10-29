@@ -2,14 +2,16 @@
 
   uv run uvicorn app.api.main:app --host 127.0.0.1 --port 8000      (scripts/app.sh)
 """
+import re
+import shutil
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import report, service
+from . import report, service, uploads
 from .scenes import catalogue, image_jpeg, scene
 
 app = FastAPI(title="EnviroSense damage assessment", version="0.1")
@@ -59,8 +61,78 @@ def get_scene(pair_id: str):
 def get_image(pair_id: str, phase: str):
     if phase not in ("pre", "post"):
         raise HTTPException(400, "phase must be pre or post")
+    if uploads.is_upload(pair_id):  # uploads: the images on the upload's own grid (before = aligned mosaic)
+        try:
+            path = uploads.folder(pair_id) / f"{phase}.jpg"
+        except KeyError:
+            path = None
+        if not path or not path.exists():
+            raise HTTPException(404, f"no {phase} image for {pair_id}")
+        return FileResponse(path, media_type="image/jpeg")
     known_scene(pair_id)
     return FileResponse(image_jpeg(pair_id, phase), media_type="image/jpeg")
+
+
+async def save_upload(f: UploadFile, dest_dir: Path, stem: str) -> Path:
+    ext = Path(f.filename or "").suffix.lower()
+    if ext not in uploads.EXTENSIONS:
+        raise HTTPException(400, f"{f.filename}: use GeoTIFF, PNG or JPEG")
+    dest, size = dest_dir / f"{stem}{ext}", 0
+    with dest.open("wb") as out:
+        while chunk := await f.read(1 << 20):
+            size += len(chunk)
+            if size > uploads.MAX_BYTES:
+                raise HTTPException(413, f"{f.filename} is larger than {uploads.MAX_BYTES >> 20} MB")
+            out.write(chunk)
+    return dest
+
+
+@app.post("/api/uploads")
+async def create_upload(after: UploadFile = File(...), before: UploadFile | None = File(None),
+                        name: str = Form(...), disaster_type: str = Form("other"), event_date: str = Form(""),
+                        model_id: str = Form("unet_early"), west: float | None = Form(None), south: float | None = Form(None),
+                        east: float | None = Form(None), north: float | None = Form(None)):
+    """After image (+ optional before image) and metadata; processed in the background, poll GET /api/uploads/{id}.
+    Plain PNG/JPEG need the after image's corner coordinates (degrees, north-up); GeoTIFFs carry their own."""
+    models = service.models()
+    if model_id not in models or models[model_id]["kind"] != "unet":
+        raise HTTPException(400, "uploads need a full-image U-Net model")
+    if disaster_type not in uploads.DISASTER_TYPES:
+        raise HTTPException(400, f"disaster_type must be one of {', '.join(uploads.DISASTER_TYPES)}")
+    if event_date and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", event_date):
+        raise HTTPException(400, "event_date must be YYYY-MM-DD")
+    corners = [west, south, east, north]
+    bounds = None
+    if any(v is not None for v in corners):
+        if any(v is None for v in corners) or not (-180 <= west < east <= 180 and -90 <= south < north <= 90):
+            raise HTTPException(400, "corner coordinates need west < east and south < north, in degrees")
+        bounds = {"west": west, "south": south, "east": east, "north": north}
+    elif Path(after.filename or "").suffix.lower() not in (".tif", ".tiff"):
+        raise HTTPException(400, "plain images need corner coordinates (west, south, east, north)")
+    uid, d = uploads.new_folder()
+    try:
+        a = await save_upload(after, d, "after_input")
+        b = await save_upload(before, d, "before_input") if before and before.filename else None
+    except HTTPException:
+        shutil.rmtree(d, ignore_errors=True)
+        raise
+    uploads.create(a, {"name": name.strip()[:80] or "Untitled upload", "disaster_type": disaster_type,
+                       "event_date": event_date or None, "model_id": model_id, "after_bounds": bounds,
+                       "before_bounds": None}, b)
+    return uploads.info(uid)
+
+
+@app.get("/api/uploads")
+def get_uploads():
+    return uploads.list_uploads()
+
+
+@app.get("/api/uploads/{uid}")
+def get_upload(uid: str):
+    try:
+        return uploads.info(uid)
+    except KeyError:
+        raise HTTPException(404, f"no upload {uid}")
 
 
 @app.post("/api/assess")

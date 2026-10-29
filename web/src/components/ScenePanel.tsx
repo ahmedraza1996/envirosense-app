@@ -19,7 +19,7 @@ export default function ScenePanel({ scenes, disasters, sceneId, onScene }: Prop
   }, [scenes, query, disaster, sort]);
 
   return (
-    <nav className="sidebar" aria-label="Scenes">
+    <>
       <div className="sidebar-head">
         <input type="search" placeholder="Search tiles" value={query} onChange={(e) => setQuery(e.target.value)} aria-label="Search tiles" />
         <div className="row">
@@ -50,6 +50,6 @@ export default function ScenePanel({ scenes, disasters, sceneId, onScene }: Prop
           </li>
         ))}
       </ul>
-    </nav>
+    </>
   );
 }

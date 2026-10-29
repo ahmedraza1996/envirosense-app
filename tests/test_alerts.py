@@ -14,8 +14,8 @@ def roof(loc, dmg, x, y, size, cls):
 
 
 def run(loc, dmg):
-    structs, _ = al.structures(loc, dmg, np.full((4, *loc.shape), 0.25, np.float32), GT, PX)
-    return al.area_alerts(loc, dmg, structs, "test_0001", GT, PX, "unet_test")
+    structs, _ = al.structures(loc, dmg, np.full((4, *loc.shape), 0.25, np.float32), al.gdal_lonlat(GT), PX)
+    return al.area_alerts(loc, dmg, structs, "test_0001", al.gdal_lonlat(GT), PX, "unet_test")
 
 
 def test_grouping_threshold_and_severity():

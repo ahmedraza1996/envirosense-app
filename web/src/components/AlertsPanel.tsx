@@ -1,4 +1,4 @@
-import { Alert, api, Assessment, CLASS_COLOUR, CLASS_LABEL, CLASSES, pct, tileNo, titleCase } from "../api";
+import { Alert, api, Assessment, BeforeInfo, CLASS_COLOUR, CLASS_LABEL, CLASSES, pct, tileNo, titleCase } from "../api";
 
 interface Props { assessment: Assessment | null; loading: boolean; onAlert: (a: Alert) => void }
 
@@ -6,19 +6,55 @@ const latlon = (lat: number, lon: number) =>
   `${Math.abs(lat).toFixed(5)}°${lat >= 0 ? "N" : "S"}, ${Math.abs(lon).toFixed(5)}°${lon >= 0 ? "E" : "W"}`;
 const area = (m2: number) => (m2 >= 10000 ? `${(m2 / 10000).toFixed(1)} ha` : `${Math.round(m2).toLocaleString()} m²`);
 
+function beforeSource(b: BeforeInfo) {
+  if (b.kind === "upload") return "Uploaded with the after image";
+  const n = b.tiles?.length ?? 0;
+  return n ? `Archive, ${n} image${n === 1 ? "" : "s"}` : "None found in the archive";
+}
+
+function BeforeImage({ a }: { a: Assessment }) {
+  const b = a.scene.before;
+  if (!b) return null;
+  const dates = [...new Set((b.tiles ?? []).map((t) => t.capture_date).filter(Boolean))].join(", ");
+  return (
+    <section>
+      <h2>Before image</h2>
+      <div className="pair">
+        <figure><img src={api.imageUrl(a.pair_id, "pre")} alt="Before image, aligned to the after image" /><figcaption>Before{dates && `, ${dates}`}</figcaption></figure>
+        <figure><img src={api.imageUrl(a.pair_id, "post")} alt="After image as uploaded" /><figcaption>After{a.scene.event_date && `, ${a.scene.event_date}`}</figcaption></figure>
+      </div>
+      <dl className="stats" style={{ marginTop: 12 }}>
+        <dt>Source</dt><dd>{beforeSource(b)}</dd>
+        <dt>Covers</dt><dd>{pct(b.coverage)} of the area</dd>
+        <dt>Offset</dt><dd>{b.shift_m == null ? "not measured" : `${b.shift_m.toFixed(1)} m${b.corrected ? ", corrected" : ""}`}</dd>
+      </dl>
+      <p className="meta">
+        {b.coverage === 0
+          ? "No before image: buildings are located on the after image only, so completely destroyed buildings can be missed."
+          : a.model.mode.includes("post-only")
+            ? "Shown for comparison. This model reads the after image only, so completely destroyed buildings can be missed; the before + after model uses it to locate buildings."
+            : "Buildings are located with the before image, damage is read from the after image."}
+        {" "}Model: {a.model.mode}.
+      </p>
+      {(a.scene.notes ?? []).map((n) => <p key={n} className="meta note">{n}</p>)}
+    </section>
+  );
+}
+
 export default function AlertsPanel({ assessment: a, loading, onAlert }: Props) {
   if (!a || a.kind !== "area") {
-    return <section><p className="empty-note">{loading ? "Detecting damage…" : "Select a tile to detect damage."}</p></section>;
+    return <section><p className="empty-note">{loading ? "Detecting damage…" : "Select a tile or an upload to detect damage."}</p></section>;
   }
   const alerts = a.alerts ?? [];
   const high = alerts.filter((x) => x.severity === "high").length;
   const p = a.summary.predicted;
-  const b = a.benchmark;
+  const b = a.benchmark && Object.keys(a.benchmark).length ? a.benchmark : null;
+  const upload = a.scene.source === "upload";
   return (
     <>
       <section>
-        <h1>{titleCase(a.scene.disaster)}, tile {tileNo(a.pair_id)}</h1>
-        <p className="meta">Imagery {a.scene.pre_date} and {a.scene.post_date} · no building inventory used</p>
+        <h1>{upload ? a.scene.name : `${titleCase(a.scene.disaster)}, tile ${tileNo(a.pair_id)}`}</h1>
+        <p className="meta">{upload ? `${titleCase(a.scene.disaster_type)} · uploaded imagery` : "Benchmark tile"} · no building inventory used</p>
         <div className="actions">
           <a className="button" href={api.reportUrl(a.id, "html")} target="_blank" rel="noreferrer">Situation report</a>
           <a className="link" href={api.reportUrl(a.id, "md")} download>Markdown</a>
@@ -45,12 +81,14 @@ export default function AlertsPanel({ assessment: a, loading, onAlert }: Props) 
               ))}
             </tbody>
           </table>
-        ) : <p className="empty-note" style={{ marginTop: 8 }}>No area meets the alert rule on this tile.</p>}
+        ) : <p className="empty-note" style={{ marginTop: 8 }}>No area meets the alert rule {upload ? "in this image" : "on this tile"}.</p>}
         <p className="meta" style={{ marginTop: 10 }}>
           An alert is raised for at least 250 m² of severely damaged roof with damage within 30 m; high when at least half
           of the building area there is severely damaged. Click a row to zoom; all alerts need analyst review.
         </p>
       </section>
+
+      {upload && <BeforeImage a={a} />}
 
       <section>
         <h2>Detected structures</h2>

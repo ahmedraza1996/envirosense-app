@@ -16,8 +16,8 @@ export default function BuildingInspector({ assessment: a, feature: f, onBack }:
 
       <section>
         <div className="pair">
-          <figure><img src={api.cropUrl(a.id, f.id, "pre")} alt="Building before the disaster" /><figcaption>Before · {a.scene.pre_date}</figcaption></figure>
-          <figure><img src={api.cropUrl(a.id, f.id, "post")} alt="Building after the disaster" /><figcaption>After · {a.scene.post_date}</figcaption></figure>
+          <figure><img src={api.cropUrl(a.id, f.id, "pre")} alt="Building before the disaster" /><figcaption>Before</figcaption></figure>
+          <figure><img src={api.cropUrl(a.id, f.id, "post")} alt="Building after the disaster" /><figcaption>After</figcaption></figure>
         </div>
       </section>
 

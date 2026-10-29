@@ -10,20 +10,19 @@ export interface MapOptions {
   phase: "pre" | "post"; damage: boolean; compare: boolean; mismatches: boolean; zones: boolean; pixelMap: boolean;
 }
 
-const SIZE = 1024;
-const BOUNDS: L.LatLngBoundsExpression = [[0, 0], [SIZE, SIZE]];
 const LABELLED_ZONES = 5;
-// Image pixels (x right, y down) -> Leaflet CRS.Simple coordinates (lat up).
-const toLatLng = (x: number, y: number) => L.latLng(SIZE - y, x);
+// Image pixels (x right, y down) -> Leaflet CRS.Simple coordinates (lat up), for an image `h` pixels tall.
+type ToLatLng = (x: number, y: number) => L.LatLng;
+const simple = (h: number): ToLatLng => (x, y) => L.latLng(h - y, x);
 
 interface Props {
   assessment: Assessment | null; loading: boolean; error: string | null;
   options: MapOptions; onOptions: (o: MapOptions) => void;
   selected: string | null; onSelect: (id: string | null) => void; focus: Focus; mode: Mode;
-  scenes: Scene[]; onScene: (id: string) => void;
+  scenes: Scene[]; onScene: (id: string) => void; message?: string;
 }
 
-function Buildings({ features, options, selected, onSelect }: { features: Feature[]; options: MapOptions; selected: string | null; onSelect: (id: string) => void }) {
+function Buildings({ features, options, selected, onSelect, toLatLng }: { features: Feature[]; options: MapOptions; selected: string | null; onSelect: (id: string) => void; toLatLng: ToLatLng }) {
   const map = useMap();
   useEffect(() => {
     const shown = options.mismatches
@@ -53,11 +52,11 @@ function Buildings({ features, options, selected, onSelect }: { features: Featur
       },
     }).addTo(map);
     return () => { layer.remove(); };
-  }, [map, features, options, selected, onSelect]);
+  }, [map, features, options, selected, onSelect, toLatLng]);
   return null;
 }
 
-function Areas({ assessment, mode }: { assessment: Assessment; mode: Mode }) {
+function Areas({ assessment, mode, toLatLng }: { assessment: Assessment; mode: Mode; toLatLng: ToLatLng }) {
   const map = useMap();
   useEffect(() => {
     // Area mode: every alert area, numbered as in the alert list. Building mode: the top priority areas.
@@ -68,13 +67,13 @@ function Areas({ assessment, mode }: { assessment: Assessment; mode: Mode }) {
         .bindTooltip(String(i + 1), { permanent: true, direction: "center", className: "zone-label" }),
     )).addTo(map);
     return () => { group.remove(); };
-  }, [map, assessment, mode]);
+  }, [map, assessment, mode, toLatLng]);
   return null;
 }
 
-function Controller({ focus, pairId }: { focus: Focus; pairId?: string }) {
+function Controller({ focus, pairId, bounds, toLatLng }: { focus: Focus; pairId?: string; bounds: L.LatLngBoundsExpression; toLatLng: ToLatLng }) {
   const map = useMap();
-  useEffect(() => { map.fitBounds(BOUNDS, { padding: [24, 24] }); }, [map, pairId]);
+  useEffect(() => { map.fitBounds(bounds, { padding: [24, 24] }); }, [map, pairId]);
   useEffect(() => { if (focus) map.flyTo(toLatLng(focus.x, focus.y), focus.zoom, { duration: 0.5 }); }, [map, focus]);
   return null;
 }
@@ -109,9 +108,13 @@ function LayersMenu({ options, set, hasPixelMap, mode }: { options: MapOptions; 
   );
 }
 
-export default function DamageMap({ assessment, loading, error, options, onOptions, selected, onSelect, focus, mode, scenes, onScene }: Props) {
+export default function DamageMap({ assessment, loading, error, options, onOptions, selected, onSelect, focus, mode, scenes, onScene, message }: Props) {
   const set = (patch: Partial<MapOptions>) => onOptions({ ...options, ...patch });
   const features = useMemo(() => assessment?.features ?? [], [assessment]);
+  const w = assessment?.scene.width_px ?? 1024;
+  const h = assessment?.scene.height_px ?? 1024;
+  const toLatLng = useMemo(() => simple(h), [h]);
+  const bounds = useMemo<L.LatLngBoundsExpression>(() => [[0, 0], [h, w]], [h, w]);
   const [view, setView] = useState<"image" | "geo">("image");
   const gt = assessment?.scene.geotransform;
   return (
@@ -120,19 +123,19 @@ export default function DamageMap({ assessment, loading, error, options, onOptio
         <GeoMap assessment={assessment} gt={gt} options={options} selected={selected} onSelect={onSelect}
           focus={focus} mode={mode} scenes={scenes} onScene={onScene} />
       ) : (
-      <MapContainer crs={L.CRS.Simple} bounds={BOUNDS} minZoom={-2} maxZoom={4} zoomSnap={0.25} preferCanvas attributionControl={false}
+      <MapContainer crs={L.CRS.Simple} bounds={bounds} minZoom={-2} maxZoom={4} zoomSnap={0.25} preferCanvas attributionControl={false}
         style={{ height: "100%" }}>
         {assessment && (
           <>
-            <ImageOverlay key={assessment.pair_id + options.phase} url={api.imageUrl(assessment.pair_id, options.phase)} bounds={BOUNDS} />
+            <ImageOverlay key={assessment.pair_id + options.phase} url={api.imageUrl(assessment.pair_id, options.phase)} bounds={bounds} />
             {options.pixelMap && assessment.has_damage_map && (
-              <ImageOverlay key={"pm" + assessment.id} url={api.damageMapUrl(assessment.id)} bounds={BOUNDS} opacity={0.8} />
+              <ImageOverlay key={"pm" + assessment.id} url={api.damageMapUrl(assessment.id)} bounds={bounds} opacity={0.8} />
             )}
-            <Buildings features={features} options={options} selected={selected} onSelect={onSelect} />
-            {options.zones && <Areas assessment={assessment} mode={mode} />}
+            <Buildings features={features} options={options} selected={selected} onSelect={onSelect} toLatLng={toLatLng} />
+            {options.zones && <Areas assessment={assessment} mode={mode} toLatLng={toLatLng} />}
           </>
         )}
-        <Controller focus={focus} pairId={assessment?.pair_id} />
+        <Controller focus={focus} pairId={assessment?.pair_id} bounds={bounds} toLatLng={toLatLng} />
       </MapContainer>
       )}
 
@@ -160,9 +163,9 @@ export default function DamageMap({ assessment, loading, error, options, onOptio
         </div>
       )}
 
-      {(loading || error || !assessment) && (
-        <div className={`map-status ${error ? "error" : ""}`}>
-          <div>{error ? error : loading ? (mode === "area" ? "Detecting damage…" : "Assessing tile…") : "Select a tile"}</div>
+      {(loading || error || !assessment || message) && (
+        <div className={`map-status ${error || message?.startsWith("Upload failed") ? "error" : ""}`}>
+          <div>{error ? error : message ? message : loading ? (mode === "area" ? "Detecting damage…" : "Assessing tile…") : "Select a tile"}</div>
         </div>
       )}
     </main>

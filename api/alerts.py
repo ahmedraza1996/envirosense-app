@@ -27,8 +27,14 @@ def pixel_to_lonlat(gt, x, y):
     return gt[0] + x * gt[1] + y * gt[2], gt[3] + x * gt[4] + y * gt[5]
 
 
-def structures(loc: np.ndarray, dmg: np.ndarray, dmg_prob: np.ndarray, gt, pixel_m: float) -> list:
-    """Connected components of the predicted building mask, each with a majority damage class."""
+def gdal_lonlat(gt):
+    """Pixel -> (lon, lat) function for an EPSG:4326 GDAL geotransform (xBD tiles)."""
+    return lambda x, y: pixel_to_lonlat(gt, x, y)
+
+
+def structures(loc: np.ndarray, dmg: np.ndarray, dmg_prob: np.ndarray, to_lonlat, pixel_m: float) -> list:
+    """Connected components of the predicted building mask, each with a majority damage class.
+    to_lonlat(x, y) -> (lon, lat) maps image pixels to coordinates (any image size or projection)."""
     n, lab, stats, cent = cv2.connectedComponentsWithStats(loc.astype(np.uint8), connectivity=8)
     out = []
     for k in range(1, n):
@@ -45,13 +51,13 @@ def structures(loc: np.ndarray, dmg: np.ndarray, dmg_prob: np.ndarray, gt, pixel
             continue
         cx, cy = map(float, cent[k])
         out.append({"id": f"S{len(out) + 1:04d}", "polygon_px": poly.astype(float).tolist(), "centroid_px": [cx, cy],
-                    "centroid_lonlat": list(pixel_to_lonlat(gt, cx, cy)), "area_m2": float(area * pixel_m ** 2),
+                    "centroid_lonlat": list(to_lonlat(cx, cy)), "area_m2": float(area * pixel_m ** 2),
                     "predicted": int(votes.argmax()), "probs": probs.tolist(), "confidence": float(probs.max()),
                     "mask_bbox": [int(x), int(y), int(w), int(h)], "label": int(k)})
     return out, lab
 
 
-def area_alerts(loc: np.ndarray, dmg: np.ndarray, structs: list, pair_id: str, gt, pixel_m: float, model_id: str):
+def area_alerts(loc: np.ndarray, dmg: np.ndarray, structs: list, pair_id: str, to_lonlat, pixel_m: float, model_id: str):
     """Alerts from damage *areas*, not structure centroids: touching buildings often merge into one detected
     structure, so centroid distances are unreliable. Severe-damage pixels are grown by EPS_M / 2 so that damage
     within EPS_M metres joins one area; an area raises an alert if it holds >= MIN_SEVERE_M2 of severely damaged roof.
@@ -63,14 +69,15 @@ def area_alerts(loc: np.ndarray, dmg: np.ndarray, structs: list, pair_id: str, g
     cent = np.array([s["centroid_px"] for s in structs]) if structs else np.zeros((0, 2))
     cls = [NAMES[s["predicted"]] for s in structs]
     alerts, below = [], []
+    h, w = loc.shape
     for k in range(1, n):
         region = lab == k
         sev_px, bld_px = int((severe & region).sum()), int(((loc > 0) & region).sum())
         sev_m2 = sev_px * pixel_m ** 2
-        inside = [i for i in range(len(structs)) if region[int(min(cent[i][1], 1023)), int(min(cent[i][0], 1023))]]
+        inside = [i for i in range(len(structs)) if region[int(min(cent[i][1], h - 1)), int(min(cent[i][0], w - 1))]]
         ys, xs = np.nonzero(severe & region)
         cx, cy = float(xs.mean()), float(ys.mean())
-        lon, lat = pixel_to_lonlat(gt, cx, cy)
+        lon, lat = to_lonlat(cx, cy)
         if sev_m2 < MIN_SEVERE_M2:
             below.append({"centroid_px": [cx, cy], "centroid_lat": lat, "centroid_lon": lon, "severe_m2": sev_m2})
             continue
@@ -87,7 +94,7 @@ def area_alerts(loc: np.ndarray, dmg: np.ndarray, structs: list, pair_id: str, g
             "structures": len(inside), "severe": counts["major-damage"] + counts["destroyed"], "counts": counts,
             "centroid_px": [cx, cy], "centroid_lat": lat, "centroid_lon": lon,
             "area_m2": float(region.sum() * pixel_m ** 2), "hull_px": ring,
-            "hull_lonlat": [list(pixel_to_lonlat(gt, x, y)) for x, y in ring],
+            "hull_lonlat": [list(to_lonlat(x, y)) for x, y in ring],
             "member_ids": [structs[i]["id"] for i in inside], "model_id": model_id,
             "priority": round(sev_m2 / 100, 1),   # ~ number of severely damaged 100 m2 roofs
         })

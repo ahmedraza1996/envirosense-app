@@ -116,6 +116,36 @@ class UNetEngine:
         sc.add(loc, dmg, loc_t.numpy(), dmg_t.numpy())
         return loc, dmg, dmg_prob, sc.result()
 
+    @property
+    def uses_pre(self):
+        return self.net.mode != "post"
+
+    @torch.no_grad()
+    def predict_large(self, pre_rgb: np.ndarray, post_rgb: np.ndarray, win: int = 1024, overlap: int = 128):
+        """Image pair of any size (uint8 RGB on the same pixel grid): overlapping windows of the training tile size,
+        probabilities averaged where windows overlap. Returns building probability (H x W), damage probs (4 x H x W).
+        A single 1024 tile gives exactly the predict_maps result."""
+        from seg_benchmark import MEAN, STD
+        h, w = post_rgb.shape[:2]
+        H, W = -(-h // 32) * 32, -(-w // 32) * 32                       # U-Net needs multiples of 32
+        pad = lambda a: np.pad(a, ((0, H - h), (0, W - w), (0, 0)))
+        norm = lambda a: torch.from_numpy(((a.astype(np.float32) - MEAN) / STD).transpose(2, 0, 1).copy())
+        pre_t, post_t = norm(pad(pre_rgb)), norm(pad(post_rgb))
+        wy, wx = min(win, H), min(win, W)
+        starts = lambda n, k: sorted(set(list(range(0, n - k, k - overlap)) + [n - k]))
+        loc_p = np.zeros((H, W), np.float32)
+        dmg_p = np.zeros((4, H, W), np.float32)
+        hits = np.zeros((H, W), np.float32)
+        with _LOCK:
+            for y in starts(H, wy):
+                for x in starts(W, wx):
+                    sl = (slice(None), slice(y, y + wy), slice(x, x + wx))
+                    l, d = self.net(pre_t[sl][None].to(self.device), post_t[sl][None].to(self.device))
+                    loc_p[y:y + wy, x:x + wx] += torch.sigmoid(l[0]).cpu().numpy()
+                    dmg_p[:, y:y + wy, x:x + wx] += torch.softmax(d[0], 0).cpu().numpy()
+                    hits[y:y + wy, x:x + wx] += 1
+        return loc_p[:h, :w] / hits[:h, :w], dmg_p[:, :h, :w] / hits[:h, :w]
+
     def assess(self, split, pair_id):
         loc, dmg, dmg_prob, scene_score = self.predict_maps(split, pair_id)
         out = []

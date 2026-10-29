@@ -18,7 +18,24 @@ export interface Scene {
   true_none: number; true_minor: number; true_major: number; true_destroyed: number; true_unclassified: number;
   severe_true: number; pre_date?: string; post_date?: string;
   centre_lat?: number; centre_lon?: number; pixel_size_m?: number; geotransform?: number[]; size_px?: number;
+  // uploads only
+  source?: "upload"; name?: string; width_px?: number; height_px?: number; event_date?: string | null;
+  before?: BeforeInfo; notes?: string[];
 }
+
+export interface BeforeInfo {
+  kind: "archive" | "upload"; archive?: string; file?: string;
+  tiles?: { tile: string; capture_date: string; covers: number }[];
+  coverage: number; shift_px: [number, number] | null; shift_m: number | null; response: number | null; corrected: boolean;
+}
+
+export interface Upload {
+  id: string; name: string; disaster_type: string; event_date: string | null; model_id: string; created_utc: string;
+  after_file: string; before_file: string | null;
+  status: { state: "queued" | "running" | "done" | "failed"; step?: string; error?: string; assessment_id?: string; alerts?: number };
+}
+
+export const DISASTER_TYPES = ["earthquake", "fire", "flooding", "wind", "tsunami", "volcano", "other"];
 
 export interface BuildingProps {
   building_id: string; predicted_class: DamageClass | null; class_probabilities: Record<DamageClass, number>;
@@ -68,7 +85,12 @@ export interface Assessment {
 }
 
 async function json<T>(r: Response): Promise<T> {
-  if (!r.ok) throw new Error(`${r.status} ${(await r.text()).slice(0, 200)}`);
+  if (!r.ok) {
+    const text = await r.text();
+    let detail = text;
+    try { detail = JSON.parse(text).detail ?? text; } catch { /* plain text */ }
+    throw new Error(String(detail).slice(0, 300));
+  }
   return r.json() as Promise<T>;
 }
 
@@ -88,6 +110,9 @@ export const api = {
     }).then(json<{ id: string }>);
     return fetch(`/api/assessments/${r.id}`).then(json<Assessment>);
   },
+  assessment: (aid: string) => fetch(`/api/assessments/${aid}`).then(json<Assessment>),
+  uploads: () => fetch("/api/uploads").then(json<Upload[]>),
+  upload: (form: FormData) => fetch("/api/uploads", { method: "POST", body: form }).then(json<Upload>),
   imageUrl: (pair_id: string, phase: "pre" | "post") => `/api/scenes/${pair_id}/image/${phase}`,
   cropUrl: (aid: string, fid: string, phase: "pre" | "post") => `/api/assessments/${aid}/features/${fid}/crop/${phase}`,
   damageMapUrl: (id: string) => `/api/assessments/${id}/damage-map`,

@@ -113,3 +113,12 @@ http://127.0.0.1:8765), because a Docker container on the Mac already listens on
 
 **Verification:** build passes; checked in the browser on Santa Rosa: tile aligned with surrounding OSM streets,
 alert area drawn, overview dots for the other Santa Rosa tiles.
+
+## A06 - Upload workflow (after image -> before image -> alerts)
+- Upload an after image (GeoTIFF, or PNG/JPEG with corner coordinates) plus name, disaster type and optional event date (`POST /api/uploads`; processed one job at a time on CPU in a background thread; `GET /api/uploads[/{id}]` for status).
+- Before image: uploaded by the user, or found by location in the xBD before-image archive (STRtree over 11k georeferenced pre tiles, captured before the event date), mosaicked onto the after image grid (`api/archive.py`, `api/imagery.py`).
+- Alignment check: phase correlation on smoothed, halved images (raw phase correlation failed on JPEG copies); offsets of 1.5-48 px are corrected, weak peaks are reported as unmeasurable. xBD pairs themselves are 1-25 px misregistered.
+- Inference: tiled 1024 windows with overlap (`UNetEngine.predict_large`, equal to `predict_maps` on one tile); pre+post where the before image covers the ground, post-only elsewhere. Alerts code now takes any pixel->lon/lat function and image size.
+- UI: Benchmark tiles | Uploads tabs, upload dialog, before-image section (source, coverage, offset), size-aware image and map views.
+- Tests: 19 passing, including upload-vs-benchmark parity, archive lookup, injected 8 px offset, JPEG upload via API.
+- Samples: `scripts/make_sample_uploads.py` -> runs/app/samples (GeoTIFF, JPEG + corners, offset GeoTIFF).
