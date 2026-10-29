@@ -24,7 +24,7 @@ export interface BuildingProps {
   building_id: string; predicted_class: DamageClass | null; class_probabilities: Record<DamageClass, number>;
   confidence: number; review_status: "auto" | "needs_review"; reason_codes: string[]; true_class: DamageClass | null;
   model_id: string; inference_mode: string; centroid_px: [number, number]; centroid_lnglat: [number, number] | null;
-  localized_fraction: number | null;
+  localized_fraction: number | null; area_m2?: number;
 }
 
 export interface Feature {
@@ -45,8 +45,21 @@ export interface Summary {
   vs_truth: { buildings_compared?: number; accuracy?: number; macro_f1_present_classes?: number; confusion?: number[][] };
 }
 
+export interface Alert {
+  alert_id: string; severity: "high" | "medium"; status: string; rule: string;
+  severe_area_m2: number; building_area_m2: number; severe_share: number; structures: number; severe: number;
+  counts: Record<DamageClass, number>; centroid_px: [number, number]; centroid_lat: number; centroid_lon: number;
+  area_m2: number; hull_px: [number, number][]; member_ids: string[];
+}
+
+export interface Benchmark {
+  xbd_buildings: number; xbd_found: number; recall: number; detections: number; detections_on_buildings: number;
+  precision: number; note: string;
+}
+
 export interface Assessment {
-  id: string; pair_id: string; created_utc: string; scene: Scene;
+  id: string; kind?: "area"; pair_id: string; created_utc: string; scene: Scene;
+  alerts?: Alert[]; alert_rule?: string; benchmark?: Benchmark; below_threshold?: unknown[];
   model: { id: string; label: string; kind: string; mode: string; run: string; checkpoint: string; git_commit: string; epoch: number; arch: string };
   review_confidence_threshold: number; summary: Summary; zones: Zone[];
   isolated_severe: { building_id: string; predicted_class: DamageClass; centroid_px: [number, number]; centroid_lat: number; centroid_lon: number }[];
@@ -68,8 +81,14 @@ export const api = {
     }).then(json<{ id: string }>);
     return fetch(`/api/assessments/${r.id}`).then(json<Assessment>);
   },
+  assessArea: async (pair_id: string, model_id: string): Promise<Assessment> => {
+    const r = await fetch("/api/assess-area", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ pair_id, model_id }),
+    }).then(json<{ id: string }>);
+    return fetch(`/api/assessments/${r.id}`).then(json<Assessment>);
+  },
   imageUrl: (pair_id: string, phase: "pre" | "post") => `/api/scenes/${pair_id}/image/${phase}`,
-  cropUrl: (pair_id: string, uid: string, phase: "pre" | "post") => `/api/scenes/${pair_id}/buildings/${uid}/crop/${phase}`,
+  cropUrl: (aid: string, fid: string, phase: "pre" | "post") => `/api/assessments/${aid}/features/${fid}/crop/${phase}`,
   damageMapUrl: (id: string) => `/api/assessments/${id}/damage-map`,
   reportUrl: (id: string, fmt: "html" | "md") => `/api/assessments/${id}/report.${fmt}`,
 };

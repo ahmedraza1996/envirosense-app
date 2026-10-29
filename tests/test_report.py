@@ -45,3 +45,18 @@ def test_report_routes(aid):
     m = client.get(f"/api/assessments/{aid}/report-map.png")
     assert m.status_code == 200 and m.content[:4] == b"\x89PNG"
     assert client.get("/api/assessments/nope__clf_B/report.md").status_code == 404
+
+
+def test_area_report_lists_every_alert():
+    """Footprint-free mode: the report has one row per alert and never mentions xBD outlines as an input."""
+    df = catalogue()
+    pid = df[(df.split == "hold") & (df.severe_true >= 20)].sort_values("buildings").pair_id.iloc[0]
+    rec = service.assess_area(pid, "unet_post")
+    md = report.markdown(rec["id"])
+    assert "## Area alerts" in md and "No building inventory was used" in md
+    assert len(re.findall(r"^\| \d+ \| AL-", md, flags=re.M)) == len(rec["alerts"])
+    assert client.get(f"/api/assessments/{rec['id']}/report.html").status_code == 200
+    assert client.get(f"/api/assessments/{rec['id']}/report-map.png").status_code == 200
+    if rec["features"]:  # a tile can legitimately have no detected structures; the report must still render
+        fid = rec["features"][0]["id"]
+        assert client.get(f"/api/assessments/{rec['id']}/features/{fid}/crop/post").headers["content-type"] == "image/png"

@@ -128,5 +128,6 @@ tr.clickable:hover td { background: var(--sunken); }
 dl.facts { display: grid; grid-template-columns: 110px 1fr; gap: 8px 12px; margin: 0; }
 dl.facts dt { color: var(--ink-3); } dl.facts dd { margin: 0; }
 .tag-review { color: var(--warn); font-weight: 600; }
+.sev { font-weight: 600; } .sev-high { color: var(--destroyed); } .sev-medium { color: var(--warn); }
 
 @media (max-width: 1180px) { .body { grid-template-columns: 240px 1fr 320px; } }

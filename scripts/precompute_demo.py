@@ -29,4 +29,8 @@ for m in models:
     for pid in picks:
         t = time.time()
         rec = service.assess(pid, m)
-        print(f"{m} {pid} {rec[summary][buildings]} buildings {time.time() - t:.1f}s", flush=True)
+        print(f"{m} {pid} {rec['summary']['buildings']} buildings {time.time() - t:.1f}s", flush=True)
+        if service.models()[m]["kind"] == "unet":  # footprint-free area alerts, the app's default mode
+            t = time.time()
+            area = service.assess_area(pid, m)
+            print(f"{m} {pid} area: {len(area['alerts'])} alerts {time.time() - t:.1f}s", flush=True)

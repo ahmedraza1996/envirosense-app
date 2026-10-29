@@ -71,3 +71,28 @@ counts do not add up to the building total; small non-zero shares show as "<1%".
 
 **Verification:** `tests/test_report.py` (numbers match the record, inconsistent counts refused, all three routes
 render); 8 backend tests pass; report checked in the browser for Harvey tile 00000149.
+
+## A04 Footprint-free area alerts (2026-10-29)
+
+**Why:** the per-building view depends on a building inventory (xBD outlines), which does not exist for a real
+disaster area, and responders need one alert per affected area, not per building.
+
+**What:** "Area alerts" mode, now the default (`api/alerts.py`, `service.assess_area`, `POST /api/assess-area`).
+The full-image U-Net marks building pixels and damage; connected building pixels become structures (derived per
+run, never stored as an inventory). Severe-damage pixels are grown by 15 m so damage within 30 m joins one area; an
+area raises an alert if it holds >= 250 m2 of severely damaged roof; severity is high when >= 50% of the building
+area there is severely damaged. Each alert: stable ID, centre lat/lon from the image georeferencing, outline,
+severe roof area, share, extent, structure counts, status "draft: analyst review required". xBD outlines are used
+only for a separate benchmark check (buildings found, detection precision). The per-building view remains as
+"Building check".
+
+**Design change during build:** the first version clustered structure centroids (DBSCAN); the U-Net merges rows
+of touching houses into one structure (Santa Rosa: 271 buildings -> 54 structures), which split a burnt
+neighbourhood into 4 small alerts and 41 isolated blobs. Clustering damage areas instead gives one high alert for
+that neighbourhood.
+
+**Also:** alert-based situation report; evidence crops for any feature (`/api/assessments/{id}/features/{fid}/crop/{phase}`);
+fixed `scripts/precompute_demo.py`, whose quotes had been stripped when it was created (it would have crashed after E12).
+
+**Verification:** synthetic alert tests (grouping, threshold, severity, stable IDs), area report test, full suite
+14 passed; checked in the browser on Santa Rosa (1 high alert) and Palu (6 alerts: 4 high, 2 medium).

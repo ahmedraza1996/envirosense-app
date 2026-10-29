@@ -72,6 +72,30 @@ def run_assessment(req: AssessRequest):
     return {k: rec[k] for k in ("id", "pair_id", "model", "summary", "created_utc")}
 
 
+@app.post("/api/assess-area")
+def run_area_assessment(req: AssessRequest):
+    """Footprint-free mode: structures detected from the image, one alert per cluster of severe damage."""
+    known_scene(req.pair_id)
+    if req.model_id not in service.models():
+        raise HTTPException(404, f"unknown model {req.model_id}")
+    if service.models()[req.model_id]["kind"] != "unet":
+        raise HTTPException(400, "area alerts need a full-image U-Net model")
+    rec = service.assess_area(req.pair_id, req.model_id, req.force)
+    return {"id": rec["id"], "pair_id": rec["pair_id"], "model": rec["model"], "alerts": len(rec["alerts"]),
+            "summary": rec["summary"], "created_utc": rec["created_utc"]}
+
+
+@app.get("/api/assessments/{aid}/features/{fid}/crop/{phase}")
+def get_feature_crop(aid: str, fid: str, phase: str):
+    if phase not in ("pre", "post"):
+        raise HTTPException(400, "phase must be pre or post")
+    stored(aid)
+    try:
+        return Response(service.feature_crop(aid, fid, phase), media_type="image/png")
+    except StopIteration:
+        raise HTTPException(404, f"no feature {fid} in {aid}")
+
+
 def stored(aid):
     path = service.STORE / f"{aid}.json"
     if not path.exists():
@@ -88,8 +112,9 @@ def get_assessment(aid: str):
 def get_summary(aid: str):
     import json
     rec = json.loads(stored(aid).read_text())
-    return {k: rec[k] for k in ("id", "scene", "model", "summary", "zones", "isolated_severe", "scene_metrics",
-                                "review_confidence_threshold", "has_damage_map")}
+    keys = ("id", "kind", "scene", "model", "summary", "zones", "alerts", "alert_rule", "isolated_severe", "benchmark",
+            "scene_metrics", "review_confidence_threshold", "has_damage_map")
+    return {k: rec[k] for k in keys if k in rec}
 
 
 @app.get("/api/assessments/{aid}/damage-map")

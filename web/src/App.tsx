@@ -3,13 +3,22 @@ import { api, Assessment, ModelInfo, Scene, tileNo, titleCase } from "./api";
 import ScenePanel from "./components/ScenePanel";
 import DamageMap, { MapOptions } from "./components/DamageMap";
 import SummaryPanel from "./components/SummaryPanel";
+import AlertsPanel from "./components/AlertsPanel";
 import BuildingInspector from "./components/BuildingInspector";
 
 export type Focus = { x: number; y: number; zoom: number; key: number } | null;
+export type Mode = "area" | "building";
+
+// Area alerts need no building inventory (full-image U-Net); the building check needs xBD outlines.
+const preferred = (models: ModelInfo[], mode: Mode) =>
+  mode === "area"
+    ? (models.find((m) => m.id === "unet_early") ?? models.find((m) => m.kind === "unet"))?.id
+    : models.find((m) => m.id === "clf_B")?.id ?? models[0]?.id;
 
 export default function App() {
   const [models, setModels] = useState<ModelInfo[]>([]);
-  const [modelId, setModelId] = useState("clf_B");
+  const [mode, setMode] = useState<Mode>("area");
+  const [modelId, setModelId] = useState<string | null>(null);
   const [scenes, setScenes] = useState<Scene[]>([]);
   const [disasters, setDisasters] = useState<string[]>([]);
   const [sceneId, setSceneId] = useState<string | null>(null);
@@ -24,6 +33,7 @@ export default function App() {
     Promise.all([api.models(), api.scenes("hold")])
       .then(([m, s]) => {
         setModels(m);
+        setModelId(preferred(m, "area") ?? null);
         setScenes(s.scenes);
         setDisasters(s.disasters);
         const first = [...s.scenes].sort((a, b) => b.severe_true - a.severe_true)[0];
@@ -32,20 +42,28 @@ export default function App() {
       .catch((e) => setError(String(e)));
   }, []);
 
+  const modeModels = useMemo(() => models.filter((m) => mode === "building" || m.kind === "unet"), [models, mode]);
+
+  const switchMode = (m: Mode) => {
+    setMode(m);
+    if (!models.some((x) => x.id === modelId && (m === "building" || x.kind === "unet"))) setModelId(preferred(models, m) ?? null);
+  };
+
   useEffect(() => {
-    if (!sceneId) return;
+    if (!sceneId || !modelId) return;
     let cancelled = false;
     setLoading(true);
     setError(null);
     setSelected(null);
-    api.assess(sceneId, modelId)
-      .then((a) => { if (!cancelled) { setAssessment(a); setOpts((o) => ({ ...o, pixelMap: o.pixelMap && a.has_damage_map })); } })
+    (mode === "area" ? api.assessArea(sceneId, modelId) : api.assess(sceneId, modelId))
+      .then((a) => { if (!cancelled) { setAssessment(a); setOpts((o) => ({ ...o, compare: mode === "building" && o.compare, mismatches: mode === "building" && o.mismatches })); } })
       .catch((e) => { if (!cancelled) setError(String(e)); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [sceneId, modelId]);
+  }, [sceneId, modelId, mode]);
 
   const building = useMemo(() => assessment?.features.find((f) => f.id === selected) ?? null, [assessment, selected]);
+  const zoomTo = (p: { centroid_px: [number, number] }) => setFocus({ x: p.centroid_px[0], y: p.centroid_px[1], zoom: 1, key: Date.now() });
 
   return (
     <div className="app">
@@ -57,10 +75,14 @@ export default function App() {
             <span className="slash">/</span><span>Tile {tileNo(assessment.pair_id)}</span></>)}
         </nav>
         <div className="spacer" />
+        <div className="segmented" role="group" aria-label="Mode">
+          <button aria-pressed={mode === "area"} onClick={() => switchMode("area")}>Area alerts</button>
+          <button aria-pressed={mode === "building"} onClick={() => switchMode("building")}>Building check</button>
+        </div>
         <label className="field-inline">
           Model
-          <select value={modelId} onChange={(e) => setModelId(e.target.value)} aria-label="Model">
-            {models.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
+          <select value={modelId ?? ""} onChange={(e) => setModelId(e.target.value)} aria-label="Model">
+            {modeModels.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
           </select>
         </label>
       </header>
@@ -68,17 +90,15 @@ export default function App() {
         <ScenePanel scenes={scenes} disasters={disasters} sceneId={sceneId} onScene={setSceneId} />
         <DamageMap
           assessment={assessment} loading={loading} error={error} options={opts} onOptions={setOpts}
-          selected={selected} onSelect={setSelected} focus={focus}
+          selected={selected} onSelect={setSelected} focus={focus} mode={mode}
         />
         <aside className="detail">
           {building && assessment ? (
             <BuildingInspector assessment={assessment} feature={building} onBack={() => setSelected(null)} />
+          ) : mode === "area" ? (
+            <AlertsPanel assessment={assessment} loading={loading} onAlert={zoomTo} />
           ) : (
-            <SummaryPanel
-              assessment={assessment} loading={loading}
-              onZone={(z) => setFocus({ x: z.centroid_px[0], y: z.centroid_px[1], zoom: 1, key: Date.now() })}
-              onBuilding={setSelected}
-            />
+            <SummaryPanel assessment={assessment} loading={loading} onZone={zoomTo} onBuilding={setSelected} />
           )}
         </aside>
       </div>

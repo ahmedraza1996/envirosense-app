@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import L from "leaflet";
 import { ImageOverlay, MapContainer, useMap } from "react-leaflet";
 import { api, Assessment, CLASS_COLOUR, CLASS_LABEL, CLASSES, Feature, NOT_DETECTED_COLOUR } from "../api";
-import type { Focus } from "../App";
+import type { Focus, Mode } from "../App";
 
 export interface MapOptions {
   phase: "pre" | "post"; damage: boolean; compare: boolean; mismatches: boolean; zones: boolean; pixelMap: boolean;
@@ -17,7 +17,7 @@ const toLatLng = (x: number, y: number) => L.latLng(SIZE - y, x);
 interface Props {
   assessment: Assessment | null; loading: boolean; error: string | null;
   options: MapOptions; onOptions: (o: MapOptions) => void;
-  selected: string | null; onSelect: (id: string | null) => void; focus: Focus;
+  selected: string | null; onSelect: (id: string | null) => void; focus: Focus; mode: Mode;
 }
 
 function Buildings({ features, options, selected, onSelect }: { features: Feature[]; options: MapOptions; selected: string | null; onSelect: (id: string) => void }) {
@@ -54,17 +54,18 @@ function Buildings({ features, options, selected, onSelect }: { features: Featur
   return null;
 }
 
-function Zones({ assessment }: { assessment: Assessment }) {
+function Areas({ assessment, mode }: { assessment: Assessment; mode: Mode }) {
   const map = useMap();
   useEffect(() => {
-    // Only the highest-priority areas are drawn; their numbers match the "Priority areas" table.
-    const group = L.layerGroup(assessment.zones.slice(0, LABELLED_ZONES).map((z, i) =>
+    // Area mode: every alert area, numbered as in the alert list. Building mode: the top priority areas.
+    const areas = mode === "area" ? (assessment.alerts ?? []) : assessment.zones.slice(0, LABELLED_ZONES);
+    const group = L.layerGroup(areas.map((z, i) =>
       L.polygon(z.hull_px.map(([x, y]) => toLatLng(x, y)),
         { color: "#1C1B19", weight: 1.5, dashArray: "5 4", fill: false, interactive: false })
         .bindTooltip(String(i + 1), { permanent: true, direction: "center", className: "zone-label" }),
     )).addTo(map);
     return () => { group.remove(); };
-  }, [map, assessment]);
+  }, [map, assessment, mode]);
   return null;
 }
 
@@ -75,7 +76,7 @@ function Controller({ focus, pairId }: { focus: Focus; pairId?: string }) {
   return null;
 }
 
-function LayersMenu({ options, set, hasPixelMap }: { options: MapOptions; set: (p: Partial<MapOptions>) => void; hasPixelMap: boolean }) {
+function LayersMenu({ options, set, hasPixelMap, mode }: { options: MapOptions; set: (p: Partial<MapOptions>) => void; hasPixelMap: boolean; mode: Mode }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -94,10 +95,10 @@ function LayersMenu({ options, set, hasPixelMap }: { options: MapOptions; set: (
       <button className="button panel-float" aria-expanded={open} onClick={() => setOpen(!open)}>Layers</button>
       {open && (
         <div className="layers-menu panel-float">
-          {item("damage", "Predicted damage")}
-          {item("compare", "Compare with xBD labels")}
-          {item("mismatches", "Show disagreements only")}
-          {item("zones", "Priority areas")}
+          {item("damage", mode === "area" ? "Detected structures" : "Predicted damage")}
+          {mode === "building" && item("compare", "Compare with xBD labels")}
+          {mode === "building" && item("mismatches", "Show disagreements only")}
+          {item("zones", mode === "area" ? "Alert areas" : "Priority areas")}
           {item("pixelMap", "Pixel damage map", !hasPixelMap)}
         </div>
       )}
@@ -105,7 +106,7 @@ function LayersMenu({ options, set, hasPixelMap }: { options: MapOptions; set: (
   );
 }
 
-export default function DamageMap({ assessment, loading, error, options, onOptions, selected, onSelect, focus }: Props) {
+export default function DamageMap({ assessment, loading, error, options, onOptions, selected, onSelect, focus, mode }: Props) {
   const set = (patch: Partial<MapOptions>) => onOptions({ ...options, ...patch });
   const features = useMemo(() => assessment?.features ?? [], [assessment]);
   return (
@@ -119,7 +120,7 @@ export default function DamageMap({ assessment, loading, error, options, onOptio
               <ImageOverlay key={"pm" + assessment.id} url={api.damageMapUrl(assessment.id)} bounds={BOUNDS} opacity={0.8} />
             )}
             <Buildings features={features} options={options} selected={selected} onSelect={onSelect} />
-            {options.zones && <Zones assessment={assessment} />}
+            {options.zones && <Areas assessment={assessment} mode={mode} />}
           </>
         )}
         <Controller focus={focus} pairId={assessment?.pair_id} />
@@ -131,7 +132,7 @@ export default function DamageMap({ assessment, loading, error, options, onOptio
             <button aria-pressed={options.phase === "pre"} onClick={() => set({ phase: "pre" })}>Before</button>
             <button aria-pressed={options.phase === "post"} onClick={() => set({ phase: "post" })}>After</button>
           </div>
-          <LayersMenu options={options} set={set} hasPixelMap={assessment.has_damage_map} />
+          <LayersMenu options={options} set={set} hasPixelMap={assessment.has_damage_map} mode={mode} />
         </div>
       )}
 
@@ -145,7 +146,7 @@ export default function DamageMap({ assessment, loading, error, options, onOptio
 
       {(loading || error || !assessment) && (
         <div className={`map-status ${error ? "error" : ""}`}>
-          <div>{error ? error : loading ? "Assessing tile…" : "Select a tile"}</div>
+          <div>{error ? error : loading ? (mode === "area" ? "Detecting damage…" : "Assessing tile…") : "Select a tile"}</div>
         </div>
       )}
     </main>
