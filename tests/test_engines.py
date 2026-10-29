@@ -28,3 +28,19 @@ def test_classifier_matches_reported_predictions(run):
             assert np.abs(got[r.uid] - expected).max() < 1e-3, (pid, r.uid, got[r.uid], expected)
             checked += 1
     assert checked > 50
+
+
+def test_unet_matches_benchmark_scoring():
+    """U-Net engine: same pixel maps and xView2 score as seg_benchmark.evaluate on the same hold scene."""
+    import torch
+    from seg_benchmark import evaluate
+    from app.api.engines import UNetEngine
+    from app.api.scenes import catalogue
+    df = catalogue()
+    pid = df[(df.split == "hold") & (df.severe_true >= 5)].sort_values("buildings").pair_id.iloc[0]
+    engine = UNetEngine(ROOT / "runs" / "S_r34_post")
+    _, _, _, score = engine.predict_maps("hold", pid)
+    ref = evaluate(engine.net, [("hold", pid)], torch.device("cpu"), workers=0)
+    assert abs(score["score"] - ref["score"]) < 1e-9 and abs(score["loc_f1"] - ref["loc_f1"]) < 1e-9
+    res = engine.assess("hold", pid)
+    assert res["buildings"] and all(abs(sum(b["probs"]) - 1) < 1e-3 for b in res["buildings"])
