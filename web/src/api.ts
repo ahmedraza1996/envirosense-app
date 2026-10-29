@@ -17,7 +17,7 @@ export interface Scene {
   pair_id: string; split: string; disaster: string; disaster_type: string; buildings: number;
   true_none: number; true_minor: number; true_major: number; true_destroyed: number; true_unclassified: number;
   severe_true: number; pre_date?: string; post_date?: string;
-  centre_lat?: number; centre_lon?: number; pixel_size_m?: number;
+  centre_lat?: number; centre_lon?: number; pixel_size_m?: number; geotransform?: number[]; size_px?: number;
 }
 
 export interface BuildingProps {
@@ -74,6 +74,7 @@ async function json<T>(r: Response): Promise<T> {
 
 export const api = {
   models: () => fetch("/api/models").then(json<ModelInfo[]>),
+  scene: (pair_id: string) => fetch(`/api/scenes/${pair_id}`).then(json<Scene>),
   scenes: (split = "hold") => fetch(`/api/scenes?split=${split}`).then(json<{ disasters: string[]; scenes: Scene[] }>),
   assess: async (pair_id: string, model_id: string): Promise<Assessment> => {
     const r = await fetch("/api/assess", {

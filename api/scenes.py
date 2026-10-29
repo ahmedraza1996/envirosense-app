@@ -42,6 +42,9 @@ def catalogue() -> pd.DataFrame:
     df["pre_date"] = dates["pre"].reindex(df.index).str[:10]
     df["post_date"] = dates["post"].reindex(df.index).str[:10]
     df["severe_true"] = df.true_major + df.true_destroyed
+    gts = geotransforms()
+    centres = [centre_lat_lon(pid) if f"{pid}_post_disaster.png" in gts else (None, None) for pid in df.index]
+    df["centre_lat"], df["centre_lon"] = [c[0] for c in centres], [c[1] for c in centres]
     return df.reset_index().rename(columns={"index": "pair_id"})
 
 
@@ -52,7 +55,9 @@ def scene(pair_id: str) -> dict:
         raise KeyError(pair_id)
     r = {k: (v.item() if hasattr(v, "item") else v) for k, v in row.iloc[0].to_dict().items()}  # numpy -> python
     lat, lon = centre_lat_lon(pair_id)
-    return {**r, "centre_lat": lat, "centre_lon": lon, "pixel_size_m": pixel_size_m(pair_id), "size_px": 1024}
+    gt = geotransforms()[f"{pair_id}_post_disaster.png"][0]  # GDAL order, EPSG:4326: pixel (x, y) -> lon, lat
+    return {**r, "centre_lat": lat, "centre_lon": lon, "pixel_size_m": pixel_size_m(pair_id), "size_px": 1024,
+            "geotransform": [float(v) for v in gt]}
 
 
 def image_jpeg(pair_id: str, phase: str) -> Path:

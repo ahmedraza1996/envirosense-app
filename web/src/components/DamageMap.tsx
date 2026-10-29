@@ -3,6 +3,8 @@ import L from "leaflet";
 import { ImageOverlay, MapContainer, useMap } from "react-leaflet";
 import { api, Assessment, CLASS_COLOUR, CLASS_LABEL, CLASSES, Feature, NOT_DETECTED_COLOUR } from "../api";
 import type { Focus, Mode } from "../App";
+import type { Scene } from "../api";
+import GeoMap from "./GeoMap";
 
 export interface MapOptions {
   phase: "pre" | "post"; damage: boolean; compare: boolean; mismatches: boolean; zones: boolean; pixelMap: boolean;
@@ -18,6 +20,7 @@ interface Props {
   assessment: Assessment | null; loading: boolean; error: string | null;
   options: MapOptions; onOptions: (o: MapOptions) => void;
   selected: string | null; onSelect: (id: string | null) => void; focus: Focus; mode: Mode;
+  scenes: Scene[]; onScene: (id: string) => void;
 }
 
 function Buildings({ features, options, selected, onSelect }: { features: Feature[]; options: MapOptions; selected: string | null; onSelect: (id: string) => void }) {
@@ -106,11 +109,17 @@ function LayersMenu({ options, set, hasPixelMap, mode }: { options: MapOptions; 
   );
 }
 
-export default function DamageMap({ assessment, loading, error, options, onOptions, selected, onSelect, focus, mode }: Props) {
+export default function DamageMap({ assessment, loading, error, options, onOptions, selected, onSelect, focus, mode, scenes, onScene }: Props) {
   const set = (patch: Partial<MapOptions>) => onOptions({ ...options, ...patch });
   const features = useMemo(() => assessment?.features ?? [], [assessment]);
+  const [view, setView] = useState<"image" | "geo">("image");
+  const gt = assessment?.scene.geotransform;
   return (
     <main className="map">
+      {view === "geo" && assessment && gt ? (
+        <GeoMap assessment={assessment} gt={gt} options={options} selected={selected} onSelect={onSelect}
+          focus={focus} mode={mode} scenes={scenes} onScene={onScene} />
+      ) : (
       <MapContainer crs={L.CRS.Simple} bounds={BOUNDS} minZoom={-2} maxZoom={4} zoomSnap={0.25} preferCanvas attributionControl={false}
         style={{ height: "100%" }}>
         {assessment && (
@@ -125,12 +134,19 @@ export default function DamageMap({ assessment, loading, error, options, onOptio
         )}
         <Controller focus={focus} pairId={assessment?.pair_id} />
       </MapContainer>
+      )}
 
       {assessment && (
         <div className="map-toolbar">
-          <div className="segmented panel-float" role="group" aria-label="Imagery">
-            <button aria-pressed={options.phase === "pre"} onClick={() => set({ phase: "pre" })}>Before</button>
-            <button aria-pressed={options.phase === "post"} onClick={() => set({ phase: "post" })}>After</button>
+          <div className="toolbar-group">
+            <div className="segmented panel-float" role="group" aria-label="View">
+              <button aria-pressed={view === "image"} onClick={() => setView("image")}>Image</button>
+              <button aria-pressed={view === "geo"} onClick={() => setView("geo")} disabled={!gt}>Map</button>
+            </div>
+            <div className="segmented panel-float" role="group" aria-label="Imagery">
+              <button aria-pressed={options.phase === "pre"} onClick={() => set({ phase: "pre" })}>Before</button>
+              <button aria-pressed={options.phase === "post"} onClick={() => set({ phase: "post" })}>After</button>
+            </div>
           </div>
           <LayersMenu options={options} set={set} hasPixelMap={assessment.has_damage_map} mode={mode} />
         </div>

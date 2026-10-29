@@ -96,3 +96,20 @@ fixed `scripts/precompute_demo.py`, whose quotes had been stripped when it was c
 
 **Verification:** synthetic alert tests (grouping, threshold, severity, stable IDs), area report test, full suite
 14 passed; checked in the browser on Santa Rosa (1 high alert) and Palu (6 alerts: 4 high, 2 medium).
+
+## A05 Geographic map view (2026-10-29)
+
+**What:** an Image | Map switch on the map (`web/src/components/GeoMap.tsx`). Map shows an OpenStreetMap
+basemap with the satellite tile placed by its own georeferencing (GDAL geotransform, EPSG:4326), detected
+structures and numbered alert areas in real coordinates, and every other tile of the set as a dot at its location
+(coloured by its xBD damage share; click to open). Scenes now carry their centre coordinates and geotransform.
+
+**Note:** placement uses the image geotransform; the label files' own lon/lat polygons differ from it by ~9 m
+(audit), so outlines may sit a few metres off OSM features. OSM tiles are fetched by the viewer's browser
+(attribution shown).
+
+**Access:** the local tunnel now uses port 8765 (`ssh -N -L 127.0.0.1:8765:127.0.0.1:8000 EnviroSense`, then
+http://127.0.0.1:8765), because a Docker container on the Mac already listens on 8000.
+
+**Verification:** build passes; checked in the browser on Santa Rosa: tile aligned with surrounding OSM streets,
+alert area drawn, overview dots for the other Santa Rosa tiles.

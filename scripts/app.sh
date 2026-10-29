@@ -1,5 +1,5 @@
 #!/bin/sh
-# Start the damage-assessment app on 127.0.0.1:8000 (reach it from the Mac with: ssh -N -L 8000:127.0.0.1:8000 EnviroSense).
+# Start the damage-assessment app on 127.0.0.1:8000 (from the Mac: ssh -N -L 127.0.0.1:8765:127.0.0.1:8000 EnviroSense, open http://127.0.0.1:8765).
 # CPU inference with 2 torch threads, so it never touches the GPUs used for training.
 set -eu
 root="$(cd "$(dirname "$0")/../.." && pwd)"  # project root (the AI repo checkout)

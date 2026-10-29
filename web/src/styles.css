@@ -64,6 +64,8 @@ select:focus, input[type="search"]:focus { border-color: var(--accent); box-shad
 .map-toolbar { position: absolute; z-index: 500; top: 12px; left: 12px; right: 12px; display: flex; justify-content: space-between;
   align-items: flex-start; pointer-events: none; }
 .map-toolbar > * { pointer-events: auto; }
+.toolbar-group { display: flex; gap: 8px; }
+.map .leaflet-control-attribution { font-size: 10px; }
 .map .leaflet-top.leaflet-left { top: 52px; }
 .panel-float { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: 0 2px 8px rgba(28,27,25,.08); }
 .layers { position: relative; }

@@ -26,4 +26,4 @@ app/scripts/setup_node.sh                      # once: Node 22 in .cache/node
 app/scripts/app.sh                             # server on 127.0.0.1:8000 (CPU only)
 uv run python -m pytest app/tests -q           # tests, from the project root
 ```
-From a laptop: `ssh -N -L 8000:127.0.0.1:8000 EnviroSense`, then open http://localhost:8000.
+From a laptop: `ssh -N -L 127.0.0.1:8765:127.0.0.1:8000 EnviroSense`, then open http://127.0.0.1:8765 (local port 8765 avoids clashes with other services on 8000).

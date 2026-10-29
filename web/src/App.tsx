@@ -56,6 +56,8 @@ export default function App() {
     setError(null);
     setSelected(null);
     (mode === "area" ? api.assessArea(sceneId, modelId) : api.assess(sceneId, modelId))
+      // results cached before georeferencing was added to the record get it from the scene
+      .then(async (a) => (a.scene.geotransform ? a : { ...a, scene: { ...a.scene, ...(await api.scene(a.pair_id)) } }))
       .then((a) => { if (!cancelled) { setAssessment(a); setOpts((o) => ({ ...o, compare: mode === "building" && o.compare, mismatches: mode === "building" && o.mismatches })); } })
       .catch((e) => { if (!cancelled) setError(String(e)); })
       .finally(() => { if (!cancelled) setLoading(false); });
@@ -90,7 +92,7 @@ export default function App() {
         <ScenePanel scenes={scenes} disasters={disasters} sceneId={sceneId} onScene={setSceneId} />
         <DamageMap
           assessment={assessment} loading={loading} error={error} options={opts} onOptions={setOpts}
-          selected={selected} onSelect={setSelected} focus={focus} mode={mode}
+          selected={selected} onSelect={setSelected} focus={focus} mode={mode} scenes={scenes} onScene={setSceneId}
         />
         <aside className="detail">
           {building && assessment ? (
