@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
-import { api, DISASTER_TYPES, ModelInfo, titleCase, Upload } from "../api";
+import { api, bestUnet, DISASTER_TYPES, ModelInfo, titleCase, Upload } from "../api";
 
 interface Props { models: ModelInfo[]; onClose: () => void; onCreated: (u: Upload) => void }
 
@@ -13,7 +13,7 @@ export default function UploadDialog({ models, onClose, onCreated }: Props) {
   const [name, setName] = useState("");
   const [type, setType] = useState("other");
   const [date, setDate] = useState("");
-  const [model, setModel] = useState(unets.find((m) => m.id === "unet_early")?.id ?? unets[0]?.id ?? "");
+  const [model, setModel] = useState(bestUnet(models)?.id ?? "");
   const [corners, setCorners] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -102,7 +102,7 @@ export default function UploadDialog({ models, onClose, onCreated }: Props) {
             <label className="field">
               <span>Model</span>
               <select value={model} onChange={(e) => setModel(e.target.value)}>
-                {unets.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
+                {unets.map((m) => <option key={m.id} value={m.id}>{m.label}{m.test_score != null ? ` · test ${m.test_score.toFixed(2)}` : ""}</option>)}
               </select>
             </label>
           </div>

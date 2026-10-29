@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { api, Assessment, ModelInfo, Scene, tileNo, titleCase, Upload } from "./api";
+import { api, Assessment, bestUnet, ModelInfo, Scene, tileNo, titleCase, Upload } from "./api";
 import ScenePanel from "./components/ScenePanel";
 import UploadPanel from "./components/UploadPanel";
 import UploadDialog from "./components/UploadDialog";
@@ -15,7 +15,7 @@ type Source = "xbd" | "upload";
 // Area alerts need no building inventory (full-image U-Net); the building check needs xBD outlines.
 const preferred = (models: ModelInfo[], mode: Mode) =>
   mode === "area"
-    ? (models.find((m) => m.id === "unet_early") ?? models.find((m) => m.kind === "unet"))?.id
+    ? bestUnet(models)?.id
     : models.find((m) => m.id === "clf_B")?.id ?? models[0]?.id;
 
 const pending = (u: Upload) => u.status.state === "queued" || u.status.state === "running";

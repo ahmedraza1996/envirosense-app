@@ -38,7 +38,7 @@ def health():
 
 @app.get("/api/models")
 def list_models():
-    return [{"id": m["id"], "label": m["label"], "kind": m["kind"], "run": m["run_dir"].name}
+    return [{"id": m["id"], "label": m["label"], "kind": m["kind"], "run": m["run_dir"].name, "test_score": m["test_score"]}
             for m in service.models().values()]
 
 

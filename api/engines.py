@@ -180,7 +180,10 @@ def discover_models() -> dict:
     for mid, label, kind, run in spec:
         d = ROOT / "runs" / run
         if (d / "best.pt").exists() and (kind != "unet" or (d / "test_metrics.json").exists()):
-            found[mid] = {"id": mid, "label": label, "kind": kind, "run_dir": d}
+            score = None
+            if (d / "test_metrics.json").exists():  # official xView2 score on the test split, used to pick the default
+                score = json.loads((d / "test_metrics.json").read_text()).get("test", {}).get("score")
+            found[mid] = {"id": mid, "label": label, "kind": kind, "run_dir": d, "test_score": score}
     return found
 
 

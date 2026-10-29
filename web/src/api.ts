@@ -11,7 +11,11 @@ export const CLASS_COLOUR: Record<DamageClass, string> = {
 };
 export const NOT_DETECTED_COLOUR = "#8F8C84";
 
-export interface ModelInfo { id: string; label: string; kind: "classifier" | "unet"; run: string }
+export interface ModelInfo { id: string; label: string; kind: "classifier" | "unet"; run: string; test_score: number | null }
+
+/** Full-image model with the best xView2 test score: the default for area alerts and uploads. */
+export const bestUnet = (models: ModelInfo[]) =>
+  models.filter((m) => m.kind === "unet").sort((a, b) => (b.test_score ?? 0) - (a.test_score ?? 0))[0];
 
 export interface Scene {
   pair_id: string; split: string; disaster: string; disaster_type: string; buildings: number;

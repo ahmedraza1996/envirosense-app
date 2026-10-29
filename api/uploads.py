@@ -224,7 +224,7 @@ def process(uid: str) -> dict:
             lp, dp = service.engine(post_id).predict_large(post, post)
             loc_p = np.where(valid, loc_p, lp)
             dmg_p[:, ~valid] = dp[:, ~valid]
-            mode = f"before + after on {qa['coverage']:.0%} of the area, after only elsewhere"
+            mode = f"before + after on {qa['coverage']:.1%} of the area, after only elsewhere"
         else:
             mode = eng.mode
     else:
