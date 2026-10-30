@@ -173,7 +173,8 @@ def discover_models() -> dict:
     spec = [
         ("clf_B", "Crop classifier B (pre + post)", "classifier", "B_r18_official"),
         ("clf_A", "Crop classifier A (post only)", "classifier", "A_r18_official"),
-        ("unet_paired", "Siamese U-Net (pre + post)", "unet", "S_r34_paired"),
+        ("unet_paired_ext", "Siamese U-Net, 80 epochs (pre + post)", "unet", "S_r34_paired_ext"),
+        ("unet_paired", "Siamese U-Net, 40 epochs (pre + post)", "unet", "S_r34_paired"),
         ("unet_early", "Full-image U-Net (pre + post, early fusion)", "unet", "S_r34_early"),
         ("unet_post", "Full-image U-Net (post only)", "unet", "S_r34_post"),
     ]
