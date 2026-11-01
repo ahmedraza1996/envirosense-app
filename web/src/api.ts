@@ -10,6 +10,8 @@ export const CLASS_COLOUR: Record<DamageClass, string> = {
   "no-damage": "#3F8F5F", "minor-damage": "#D9A520", "major-damage": "#D9622B", destroyed: "#B3261E",
 };
 export const NOT_DETECTED_COLOUR = "#8F8C84";
+// "Before" view: footprints the model found, drawn neutrally. Damage is only read, and only coloured, on the After image.
+export const FOOTPRINT_COLOUR = "#2457A6";
 
 export interface ModelInfo { id: string; label: string; kind: "classifier" | "unet"; run: string; test_score: number | null }
 

@@ -122,3 +122,9 @@ alert area drawn, overview dots for the other Santa Rosa tiles.
 - UI: Benchmark tiles | Uploads tabs, upload dialog, before-image section (source, coverage, offset), size-aware image and map views.
 - Tests: 19 passing, including upload-vs-benchmark parity, archive lookup, injected 8 px offset, JPEG upload via API.
 - Samples: `scripts/make_sample_uploads.py` -> runs/app/samples (GeoTIFF, JPEG + corners, offset GeoTIFF).
+
+## A07 - Map and Before/After views
+- Map view shows damage on the street map: the satellite photo is now an optional layer ("Satellite image" in Layers, off by default); alert areas are filled by severity; the assessed tile extent is a dotted frame.
+- Before/After: damage colours appear only on After. Before shows the buildings the model found as neutral blue outlines (and hides alert areas), so the two views no longer look like the same result on different photos.
+- index.html is served with no-cache, so a new build shows on the next reload.
+- The default model is the best test score (E14 Siamese, 0.591); E14 is registered as unet_paired_ext.

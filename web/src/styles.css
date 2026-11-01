@@ -173,3 +173,5 @@ dl.facts dt { color: var(--ink-3); } dl.facts dd { margin: 0; }
 .corners label { display: grid; gap: 4px; font-size: 12px; color: var(--ink-3); }
 .form-error { margin: 0 24px 14px; padding: 8px 12px; border-radius: var(--radius); background: #FBEDEB; color: var(--destroyed); }
 @media (max-width: 560px) { .row-2 { grid-template-columns: 1fr; } .corners { grid-template-columns: 1fr 1fr; } }
+
+.swatch.footprint { border: 1.5px solid #2457A6; background: rgba(36,87,166,.15); }

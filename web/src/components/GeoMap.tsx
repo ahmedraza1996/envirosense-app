@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import L from "leaflet";
-import { CircleMarker, ImageOverlay, MapContainer, TileLayer, Tooltip, useMap } from "react-leaflet";
-import { api, Assessment, CLASS_COLOUR, Feature, NOT_DETECTED_COLOUR, Scene, tileNo, titleCase } from "../api";
+import { CircleMarker, ImageOverlay, MapContainer, Rectangle, TileLayer, Tooltip, useMap } from "react-leaflet";
+import { api, Assessment, CLASS_COLOUR, CLASS_LABEL, Feature, FOOTPRINT_COLOUR, NOT_DETECTED_COLOUR, Scene, tileNo, titleCase } from "../api";
 import type { Focus, Mode } from "../App";
 import type { MapOptions } from "./DamageMap";
 
@@ -25,13 +25,20 @@ function Features({ assessment, gt, options, selected, onSelect }: Pick<Props, "
       coordsToLatLng: (c) => toLatLng(gt, c[0], c[1]),
       style: (f) => {
         const feat = f as unknown as Feature;
+        const sel = feat.id === selected;
+        if (options.phase === "pre") return { color: sel ? "#FFFFFF" : FOOTPRINT_COLOUR, weight: sel ? 3 : 1.5, fillColor: FOOTPRINT_COLOUR, fillOpacity: 0.15 };
         const fill = feat.properties.predicted_class ? CLASS_COLOUR[feat.properties.predicted_class] : NOT_DETECTED_COLOUR;
-        return { color: feat.id === selected ? "#FFFFFF" : fill, weight: feat.id === selected ? 3 : 1, fillColor: fill, fillOpacity: 0.5 };
+        return { color: sel ? "#FFFFFF" : fill, weight: sel ? 3 : 1, fillColor: fill, fillOpacity: 0.6 };
       },
-      onEachFeature: (f, l) => { l.on("click", () => onSelect((f as unknown as Feature).id)); },
+      onEachFeature: (f, l) => {
+        const p = (f as unknown as Feature).properties;
+        l.on("click", () => onSelect((f as unknown as Feature).id));
+        l.bindTooltip(options.phase === "pre" ? "Building found by the model"
+          : `${p.predicted_class ? CLASS_LABEL[p.predicted_class] : "Not detected"} (${Math.round(p.confidence * 100)}%)`, { sticky: true, direction: "top" });
+      },
     }).addTo(map);
     return () => { layer.remove(); };
-  }, [map, assessment, gt, options.damage, selected, onSelect]);
+  }, [map, assessment, gt, options.damage, options.phase, selected, onSelect]);
   return null;
 }
 
@@ -39,10 +46,14 @@ function Areas({ assessment, gt, mode }: { assessment: Assessment; gt: GT; mode:
   const map = useMap();
   useEffect(() => {
     const areas = mode === "area" ? (assessment.alerts ?? []) : assessment.zones.slice(0, 5);
-    const group = L.layerGroup(areas.map((z, i) =>
-      L.polygon(z.hull_px.map(([x, y]) => toLatLng(gt, x, y)), { color: "#1C1B19", weight: 1.5, dashArray: "5 4", fill: false, interactive: false })
-        .bindTooltip(String(i + 1), { permanent: true, direction: "center", className: "zone-label" }),
-    )).addTo(map);
+    // Alert areas are filled by severity so the affected neighbourhoods stand out on the street map.
+    const group = L.layerGroup(areas.map((z, i) => {
+      const sev = "severity" in z ? (z as { severity: string }).severity : null;
+      const c = sev === "high" ? CLASS_COLOUR.destroyed : sev === "medium" ? CLASS_COLOUR["major-damage"] : "#1C1B19";
+      return L.polygon(z.hull_px.map(([x, y]) => toLatLng(gt, x, y)),
+        { color: c, weight: 2, dashArray: "6 4", fill: !!sev, fillColor: c, fillOpacity: 0.12, interactive: false })
+        .bindTooltip(String(i + 1), { permanent: true, direction: "center", className: "zone-label" });
+    })).addTo(map);
     return () => { group.remove(); };
   }, [map, assessment, gt, mode]);
   return null;
@@ -63,10 +74,11 @@ export default function GeoMap({ assessment, gt, options, selected, onSelect, fo
     <MapContainer bounds={bounds} maxZoom={20} zoomSnap={0.5} preferCanvas style={{ height: "100%" }}>
       <TileLayer url="https://tile.openstreetmap.org/{z}/{x}/{y}.png" maxNativeZoom={19} maxZoom={20}
         attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' />
-      <ImageOverlay key={assessment.pair_id + options.phase} url={api.imageUrl(assessment.pair_id, options.phase)} bounds={bounds} opacity={0.95} />
-      {options.pixelMap && assessment.has_damage_map && <ImageOverlay url={api.damageMapUrl(assessment.id)} bounds={bounds} opacity={0.8} />}
+      <Rectangle bounds={bounds} pathOptions={{ color: "#1C1B19", weight: 1, dashArray: "2 4", fill: false, interactive: false }} />
+      {options.satellite && <ImageOverlay key={assessment.pair_id + options.phase} url={api.imageUrl(assessment.pair_id, options.phase)} bounds={bounds} opacity={0.92} />}
+      {options.pixelMap && options.phase === "post" && assessment.has_damage_map && <ImageOverlay url={api.damageMapUrl(assessment.id)} bounds={bounds} opacity={0.8} />}
       <Features assessment={assessment} gt={gt} options={options} selected={selected} onSelect={onSelect} />
-      {options.zones && <Areas assessment={assessment} gt={gt} mode={mode} />}
+      {options.zones && options.phase === "post" && <Areas assessment={assessment} gt={gt} mode={mode} />}
       {scenes.filter((s) => s.centre_lat != null && s.pair_id !== assessment.pair_id).map((s) => {
         const share = s.buildings ? s.severe_true / s.buildings : 0;
         const colour = share >= 0.5 ? CLASS_COLOUR.destroyed : share >= 0.15 ? CLASS_COLOUR["major-damage"] : CLASS_COLOUR["no-damage"];

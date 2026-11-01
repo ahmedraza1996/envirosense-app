@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import L from "leaflet";
 import { ImageOverlay, MapContainer, useMap } from "react-leaflet";
-import { api, Assessment, CLASS_COLOUR, CLASS_LABEL, CLASSES, Feature, NOT_DETECTED_COLOUR } from "../api";
+import { api, Assessment, CLASS_COLOUR, CLASS_LABEL, CLASSES, Feature, FOOTPRINT_COLOUR, NOT_DETECTED_COLOUR } from "../api";
 import type { Focus, Mode } from "../App";
 import type { Scene } from "../api";
 import GeoMap from "./GeoMap";
 
 export interface MapOptions {
   phase: "pre" | "post"; damage: boolean; compare: boolean; mismatches: boolean; zones: boolean; pixelMap: boolean;
+  satellite: boolean;   // geographic view only: draw the satellite image over the street map
 }
 
 const LABELLED_ZONES = 5;
@@ -33,6 +34,11 @@ function Buildings({ features, options, selected, onSelect, toLatLng }: { featur
       style: (f) => {
         const feat = f as unknown as Feature;
         const p = feat.properties;
+        const isSel0 = feat.id === selected;
+        if (options.phase === "pre") {
+          return { color: isSel0 ? "#FFFFFF" : FOOTPRINT_COLOUR, weight: isSel0 ? 3 : 1.5, fillColor: FOOTPRINT_COLOUR,
+                   fillOpacity: options.damage ? 0.12 : 0, opacity: options.damage || isSel0 ? 1 : 0 };
+        }
         const fill = p.predicted_class ? CLASS_COLOUR[p.predicted_class] : NOT_DETECTED_COLOUR;
         const edge = options.compare ? (p.true_class ? CLASS_COLOUR[p.true_class] : "#FFFFFF") : fill;
         const isSel = feat.id === selected;
@@ -46,6 +52,7 @@ function Buildings({ features, options, selected, onSelect, toLatLng }: { featur
         const p = (f as unknown as Feature).properties;
         l.on("click", () => onSelect((f as unknown as Feature).id));
         l.bindTooltip(
+          options.phase === "pre" ? "Building found by the model" :
           `${p.predicted_class ? CLASS_LABEL[p.predicted_class] : "Not detected"} (${Math.round(p.confidence * 100)}%)` +
           (p.true_class ? ` · xBD ${CLASS_LABEL[p.true_class]}` : ""), { sticky: true, direction: "top" },
         );
@@ -78,7 +85,7 @@ function Controller({ focus, pairId, bounds, toLatLng }: { focus: Focus; pairId?
   return null;
 }
 
-function LayersMenu({ options, set, hasPixelMap, mode }: { options: MapOptions; set: (p: Partial<MapOptions>) => void; hasPixelMap: boolean; mode: Mode }) {
+function LayersMenu({ options, set, hasPixelMap, mode, geo }: { options: MapOptions; set: (p: Partial<MapOptions>) => void; hasPixelMap: boolean; mode: Mode; geo: boolean }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -102,6 +109,7 @@ function LayersMenu({ options, set, hasPixelMap, mode }: { options: MapOptions; 
           {mode === "building" && item("mismatches", "Show disagreements only")}
           {item("zones", mode === "area" ? "Alert areas" : "Priority areas")}
           {item("pixelMap", "Pixel damage map", !hasPixelMap)}
+          {geo && item("satellite", "Satellite image")}
         </div>
       )}
     </div>
@@ -132,7 +140,7 @@ export default function DamageMap({ assessment, loading, error, options, onOptio
               <ImageOverlay key={"pm" + assessment.id} url={api.damageMapUrl(assessment.id)} bounds={bounds} opacity={0.8} />
             )}
             <Buildings features={features} options={options} selected={selected} onSelect={onSelect} toLatLng={toLatLng} />
-            {options.zones && <Areas assessment={assessment} mode={mode} toLatLng={toLatLng} />}
+            {options.zones && options.phase === "post" && <Areas assessment={assessment} mode={mode} toLatLng={toLatLng} />}
           </>
         )}
         <Controller focus={focus} pairId={assessment?.pair_id} bounds={bounds} toLatLng={toLatLng} />
@@ -151,15 +159,24 @@ export default function DamageMap({ assessment, loading, error, options, onOptio
               <button aria-pressed={options.phase === "post"} onClick={() => set({ phase: "post" })}>After</button>
             </div>
           </div>
-          <LayersMenu options={options} set={set} hasPixelMap={assessment.has_damage_map} mode={mode} />
+          <LayersMenu options={options} set={set} hasPixelMap={assessment.has_damage_map} mode={mode} geo={view === "geo"} />
         </div>
       )}
 
       {assessment && (
         <div className="legend panel-float">
-          {CLASSES.map((c) => <span key={c}><i className="swatch" style={{ background: CLASS_COLOUR[c] }} />{CLASS_LABEL[c]}</span>)}
-          <span><i className="swatch dashed" />Needs review</span>
-          {options.compare && <span className="subtle">Fill: model · outline: xBD</span>}
+          {options.phase === "pre" ? (
+            <>
+              <span><i className="swatch footprint" />Building found by the model</span>
+              <span className="subtle">Damage is read from the After image</span>
+            </>
+          ) : (
+            <>
+              {CLASSES.map((c) => <span key={c}><i className="swatch" style={{ background: CLASS_COLOUR[c] }} />{CLASS_LABEL[c]}</span>)}
+              <span><i className="swatch dashed" />Needs review</span>
+              {options.compare && <span className="subtle">Fill: model · outline: xBD</span>}
+            </>
+          )}
         </div>
       )}
 

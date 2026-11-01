@@ -234,5 +234,14 @@ def get_report_map(aid: str):
     return Response(report_or_404(report.map_png, aid), media_type="image/png")
 
 
+class WebFiles(StaticFiles):
+    """React build. index.html is never cached, so a new build shows on the next reload; hashed assets cache for good."""
+
+    async def get_response(self, path, scope):
+        resp = await super().get_response(path, scope)
+        resp.headers["Cache-Control"] = "public, max-age=31536000, immutable" if path.startswith("assets/") else "no-cache"
+        return resp
+
+
 if WEB.exists():  # React build; the API routes above take precedence
-    app.mount("/", StaticFiles(directory=WEB, html=True), name="web")
+    app.mount("/", WebFiles(directory=WEB, html=True), name="web")
