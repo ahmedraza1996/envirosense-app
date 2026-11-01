@@ -111,3 +111,31 @@ def test_api_plain_image_with_corners(tile, store):
     if rec["features"]:
         assert client.get(f"/api/assessments/{aid}/features/{rec['features'][0]['id']}/crop/post").status_code == 200
     assert any(u["id"] == uid for u in client.get("/api/uploads").json())
+
+
+def test_plain_pair_with_its_own_before_corners(tile, store):
+    """A JPEG before image carries its own corner coordinates (they differ slightly from the after image's)."""
+    pid, rgb, tf = tile
+    gt_pre = geotransforms()[f"{pid}_pre_disaster.png"][0]
+    pre = cv2.imread(str(XBD / "hold" / "images" / f"{pid}_pre_disaster.png"))
+    corners = lambda g: {"west": g[0], "north": g[3], "east": g[0] + 1024 * g[1], "south": g[3] + 1024 * g[5]}
+    client = TestClient(app)
+    files = {"after": ("post.jpg", cv2.imencode(".jpg", cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))[1].tobytes(), "image/jpeg"),
+             "before": ("pre.jpg", cv2.imencode(".jpg", pre)[1].tobytes(), "image/jpeg")}
+    data = {"name": "Pair", "disaster_type": "fire", "model_id": "unet_post", **corners(tf.to_gdal()),
+            **{f"before_{k}": v for k, v in corners(gt_pre).items()}}
+    r = client.post("/api/uploads", files=files, data=data)
+    assert r.status_code == 200, r.text
+    uid = r.json()["id"]
+    for _ in range(300):
+        st = client.get(f"/api/uploads/{uid}").json()["status"]
+        if st["state"] in ("done", "failed"):
+            break
+        time.sleep(1)
+    assert st["state"] == "done", st
+    b = client.get(f"/api/assessments/{st['assessment_id']}").json()["scene"]["before"]
+    assert b["kind"] == "upload" and b["coverage"] > 0.95
+    # a plain before image with neither its own corners nor an after image to borrow them from is refused
+    r = client.post("/api/uploads", files={"after": ("a.tif", open(uploads.folder(uid) / "after_input.jpg", "rb").read(), "image/tiff"),
+                                           "before": files["before"]}, data={"name": "x", "disaster_type": "fire", "model_id": "unet_post"})
+    assert r.status_code == 400 and "before" in r.text

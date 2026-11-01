@@ -5,6 +5,27 @@ interface Props { models: ModelInfo[]; onClose: () => void; onCreated: (u: Uploa
 
 const isGeoTiff = (f: File | null) => !!f && /\.tiff?$/i.test(f.name);
 const CORNERS = ["west", "south", "east", "north"] as const;
+type Corners = Record<string, string>;
+
+function CornerInputs({ legend, value, onChange, action }: { legend: string; value: Corners; onChange: (v: Corners) => void; action?: React.ReactNode }) {
+  return (
+    <fieldset className="field corners">
+      <legend>{legend}</legend>
+      {CORNERS.map((c) => (
+        <label key={c}>
+          <span>{titleCase(c)}</span>
+          <input type="number" step="any" required value={value[c] ?? ""}
+            placeholder={c === "west" || c === "east" ? "longitude" : "latitude"}
+            onChange={(e) => onChange({ ...value, [c]: e.target.value })} />
+        </label>
+      ))}
+      {action}
+    </fieldset>
+  );
+}
+
+const asCorners = (o: Record<string, number> | undefined): Corners | null =>
+  o && CORNERS.every((c) => typeof o[c] === "number") ? Object.fromEntries(CORNERS.map((c) => [c, String(o[c])])) : null;
 
 export default function UploadDialog({ models, onClose, onCreated }: Props) {
   const unets = models.filter((m) => m.kind === "unet");
@@ -14,11 +35,33 @@ export default function UploadDialog({ models, onClose, onCreated }: Props) {
   const [type, setType] = useState("other");
   const [date, setDate] = useState("");
   const [model, setModel] = useState(bestUnet(models)?.id ?? "");
-  const [corners, setCorners] = useState<Record<string, string>>({});
+  const [corners, setCorners] = useState<Corners>({});
+  const [beforeCorners, setBeforeCorners] = useState<Corners>({});
+  const [loaded, setLoaded] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const dialog = useRef<HTMLDialogElement>(null);
   const needCorners = !!after && !isGeoTiff(after);
+  const needBeforeCorners = !!before && !isGeoTiff(before);
+
+  // metadata.json (from the demo set, or written by hand): fills the form
+  const loadMetadata = async (f: File | null) => {
+    if (!f) return;
+    try {
+      const m = JSON.parse(await f.text());
+      if (m.name) setName(String(m.name));
+      if (DISASTER_TYPES.includes(m.disaster_type)) setType(m.disaster_type);
+      if (m.event_date) setDate(String(m.event_date).slice(0, 10));
+      const a = asCorners(m.after_corners), b = asCorners(m.before_corners);
+      if (a) setCorners(a);
+      if (b) setBeforeCorners(b);
+      setLoaded(`${f.name}: ${[m.name && "name", m.disaster_type && "type", m.event_date && "date", a && "after corners", b && "before corners"].filter(Boolean).join(", ")}`);
+      setError(null);
+    } catch {
+      setLoaded(null);
+      setError(`${f.name} is not valid JSON`);
+    }
+  };
 
   useEffect(() => { dialog.current?.showModal(); }, []);
 
@@ -33,6 +76,7 @@ export default function UploadDialog({ models, onClose, onCreated }: Props) {
     form.append("event_date", date);
     form.append("model_id", model);
     if (needCorners) CORNERS.forEach((c) => form.append(c, corners[c] ?? ""));
+    if (needBeforeCorners) CORNERS.forEach((c) => form.append(`before_${c}`, beforeCorners[c] ?? ""));
     setBusy(true);
     setError(null);
     try {
@@ -54,30 +98,29 @@ export default function UploadDialog({ models, onClose, onCreated }: Props) {
 
         <div className="form-grid">
           <label className="field">
+            <span>Metadata file <em>optional</em></span>
+            <input type="file" accept=".json,application/json" onChange={(e) => loadMetadata(e.target.files?.[0] ?? null)} />
+            <small>{loaded ? `Filled from ${loaded}` : "A metadata.json fills in the name, type, date and corner coordinates below."}</small>
+          </label>
+
+          <label className="field">
             <span>After image</span>
             <input type="file" accept=".tif,.tiff,.png,.jpg,.jpeg" required onChange={(e) => setAfter(e.target.files?.[0] ?? null)} />
             <small>GeoTIFF with its georeferencing, or PNG/JPEG with corner coordinates. Up to about 2 × 2 km.</small>
           </label>
 
-          {needCorners && (
-            <fieldset className="field corners">
-              <legend>Corner coordinates of the after image (degrees, north-up)</legend>
-              {CORNERS.map((c) => (
-                <label key={c}>
-                  <span>{titleCase(c)}</span>
-                  <input type="number" step="any" required value={corners[c] ?? ""}
-                    placeholder={c === "west" || c === "east" ? "longitude" : "latitude"}
-                    onChange={(e) => setCorners({ ...corners, [c]: e.target.value })} />
-                </label>
-              ))}
-            </fieldset>
-          )}
+          {needCorners && <CornerInputs legend="Corner coordinates of the after image (degrees, north-up)" value={corners} onChange={setCorners} />}
 
           <label className="field">
             <span>Before image <em>optional</em></span>
             <input type="file" accept=".tif,.tiff,.png,.jpg,.jpeg" onChange={(e) => setBefore(e.target.files?.[0] ?? null)} />
-            <small>Leave empty to search the archive. A plain image is taken to cover the same corners as the after image.</small>
+            <small>Leave empty to search the archive for one.</small>
           </label>
+
+          {needBeforeCorners && (
+            <CornerInputs legend="Corner coordinates of the before image (degrees, north-up)" value={beforeCorners} onChange={setBeforeCorners}
+              action={needCorners ? <button type="button" className="link copy-corners" onClick={() => setBeforeCorners(corners)}>Same as after image</button> : undefined} />
+          )}
 
           <div className="row-2">
             <label className="field">

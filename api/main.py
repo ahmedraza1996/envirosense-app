@@ -91,7 +91,9 @@ async def save_upload(f: UploadFile, dest_dir: Path, stem: str) -> Path:
 async def create_upload(after: UploadFile = File(...), before: UploadFile | None = File(None),
                         name: str = Form(...), disaster_type: str = Form("other"), event_date: str = Form(""),
                         model_id: str = Form("unet_early"), west: float | None = Form(None), south: float | None = Form(None),
-                        east: float | None = Form(None), north: float | None = Form(None)):
+                        east: float | None = Form(None), north: float | None = Form(None),
+                        before_west: float | None = Form(None), before_south: float | None = Form(None),
+                        before_east: float | None = Form(None), before_north: float | None = Form(None)):
     """After image (+ optional before image) and metadata; processed in the background, poll GET /api/uploads/{id}.
     Plain PNG/JPEG need the after image's corner coordinates (degrees, north-up); GeoTIFFs carry their own."""
     models = service.models()
@@ -101,24 +103,32 @@ async def create_upload(after: UploadFile = File(...), before: UploadFile | None
         raise HTTPException(400, f"disaster_type must be one of {', '.join(uploads.DISASTER_TYPES)}")
     if event_date and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", event_date):
         raise HTTPException(400, "event_date must be YYYY-MM-DD")
-    corners = [west, south, east, north]
-    bounds = None
-    if any(v is not None for v in corners):
-        if any(v is None for v in corners) or not (-180 <= west < east <= 180 and -90 <= south < north <= 90):
-            raise HTTPException(400, "corner coordinates need west < east and south < north, in degrees")
-        bounds = {"west": west, "south": south, "east": east, "north": north}
-    elif Path(after.filename or "").suffix.lower() not in (".tif", ".tiff"):
+    def corner_box(vals, what):
+        if all(v is None for v in vals):
+            return None
+        w, s, e, n = vals
+        if any(v is None for v in vals) or not (-180 <= w < e <= 180 and -90 <= s < n <= 90):
+            raise HTTPException(400, f"{what}: corner coordinates need west < east and south < north, in degrees")
+        return {"west": w, "south": s, "east": e, "north": n}
+
+    is_tif = lambda f: Path(f.filename or "").suffix.lower() in (".tif", ".tiff")
+    bounds = corner_box([west, south, east, north], "after image")
+    before_bounds = corner_box([before_west, before_south, before_east, before_north], "before image")
+    if bounds is None and not is_tif(after):
         raise HTTPException(400, "plain images need corner coordinates (west, south, east, north)")
+    has_before = bool(before and before.filename)
+    if has_before and before_bounds is None and not is_tif(before) and bounds is None:
+        raise HTTPException(400, "a plain before image needs its own corner coordinates (before_west, before_south, before_east, before_north)")
     uid, d = uploads.new_folder()
     try:
         a = await save_upload(after, d, "after_input")
-        b = await save_upload(before, d, "before_input") if before and before.filename else None
+        b = await save_upload(before, d, "before_input") if has_before else None
     except HTTPException:
         shutil.rmtree(d, ignore_errors=True)
         raise
     uploads.create(a, {"name": name.strip()[:80] or "Untitled upload", "disaster_type": disaster_type,
                        "event_date": event_date or None, "model_id": model_id, "after_bounds": bounds,
-                       "before_bounds": None}, b)
+                       "before_bounds": before_bounds}, b)
     return uploads.info(uid)
 
 

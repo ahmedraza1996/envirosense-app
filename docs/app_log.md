@@ -128,3 +128,9 @@ alert area drawn, overview dots for the other Santa Rosa tiles.
 - Before/After: damage colours appear only on After. Before shows the buildings the model found as neutral blue outlines (and hides alert areas), so the two views no longer look like the same result on different photos.
 - index.html is served with no-cache, so a new build shows on the next reload.
 - The default model is the best test score (E14 Siamese, 0.591); E14 is registered as unet_paired_ext.
+
+## A08 - Pair upload with coordinates, metadata file, demo set
+- The before image can carry its own corner coordinates (`before_west/south/east/north`); a plain before image with no coordinates of its own and no after-image corners is refused with a clear message.
+- Upload dialog reads an optional `metadata.json` (name, disaster type, event date, after/before corners) and fills the form; corner inputs for the before image with a "Same as after image" shortcut.
+- `scripts/make_demo_set.py` builds `demo_set/`: eight xBD hold scenarios, each with `pre/post.tif` (embedded georeferencing), `pre/post.jpg`, `metadata.json`; README with the demo walkthrough and truth for the presenter. `scripts/run_demo_set.py` pushes every scenario through the upload API (GeoTIFF or JPEG route).
+- Checked end to end on all eight scenarios (E14 model). GeoTIFF and JPEG routes measure the same before/after offset; JPEG compression changes structure counts.

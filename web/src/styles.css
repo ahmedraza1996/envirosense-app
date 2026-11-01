@@ -175,3 +175,4 @@ dl.facts dt { color: var(--ink-3); } dl.facts dd { margin: 0; }
 @media (max-width: 560px) { .row-2 { grid-template-columns: 1fr; } .corners { grid-template-columns: 1fr 1fr; } }
 
 .swatch.footprint { border: 1.5px solid #2457A6; background: rgba(36,87,166,.15); }
+.copy-corners { grid-column: 1 / -1; justify-self: start; font-size: 12px; }
