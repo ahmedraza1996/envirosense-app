@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
-import { Alert, AlertContext, api, Assessment, BeforeInfo, CLASS_COLOUR, CLASS_LABEL, CLASSES, Context, pct, REVIEW_LABEL, reviewerName, setReviewerName, ReviewEntry, Reviews, ReviewStatus, tileNo, titleCase } from "../api";
+import { Alert, AlertContext, api, Assessment, BeforeInfo, CLASS_COLOUR, CLASS_LABEL, CLASSES, Context, can, pct, REVIEW_LABEL, ReviewEntry, Reviews, ReviewStatus, tileNo, titleCase, User } from "../api";
 
 interface Props {
   assessment: Assessment | null; loading: boolean; onAlert: (a: Alert) => void;
   alertId: string | null; reviews: Reviews | null; onReview: (alertId: string, status: ReviewStatus, note: string) => Promise<void>;
-  context: Context | null;
+  context: Context | null; user: User;
 }
 
 const latlon = (lat: number, lon: number) =>
@@ -65,24 +65,25 @@ function ContextLines({ c }: { c: AlertContext }) {
   );
 }
 
-function ReviewCard({ alert, index, entry, context, onReview }: {
-  alert: Alert; index: number; entry: ReviewEntry; context: Context | null;
+function ReviewCard({ alert, index, entry, context, onReview, user }: {
+  alert: Alert; index: number; entry: ReviewEntry; context: Context | null; user: User;
   onReview: (alertId: string, status: ReviewStatus, note: string) => Promise<void>;
 }) {
   const [note, setNote] = useState(entry.note);
-  const [who, setWho] = useState(reviewerName());
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   useEffect(() => { setNote(entry.note); setErr(null); }, [alert.alert_id, entry.note]);
   const save = async (status: ReviewStatus) => {
     setErr(null);
-    if (!who.trim()) { setErr("Enter your name first: every decision is recorded with it."); return; }
     if ((status === "dismissed" || status === "retracted") && !note.trim()) { setErr(`A reason is required to ${status === "dismissed" ? "dismiss" : "retract"} an alert.`); return; }
-    setReviewerName(who.trim());
+    if (status === "pending" && entry.status === "proposed" && !note.trim()) { setErr("Say why the proposal is returned."); return; }
     setBusy(true);
     try { await onReview(alert.alert_id, status, note); } catch (e) { setErr(String(e)); } finally { setBusy(false); }
   };
   const c = context?.available ? context.alerts[alert.alert_id] : undefined;
+  const officer = can(user, "approve");
+  const mine = entry.proposed_by === user.username;
+  const closed = entry.status === "dismissed" || entry.status === "retracted";
   return (
     <div className="review-card">
       <div className="review-head">
@@ -100,20 +101,21 @@ function ReviewCard({ alert, index, entry, context, onReview }: {
       {context?.available === null && <p className="meta">Looking up nearby facilities…</p>}
       {context?.available === false && <p className="meta" title={context.error}>Nearby facilities unavailable (OpenStreetMap not reachable).</p>}
       <label className="field-block">
-        <span>Your name</span>
-        <input type="text" value={who} maxLength={60} placeholder="Recorded with every decision" onChange={(e) => setWho(e.target.value)} />
-      </label>
-      <label className="field-block">
         <span>Note (required to dismiss or retract)</span>
         <textarea value={note} maxLength={500} rows={2} placeholder="What you checked, who was told, why" onChange={(e) => setNote(e.target.value)} />
       </label>
       <div className="btn-row">
-        <button className="button primary" disabled={busy} onClick={() => save("confirmed")}>Confirm</button>
-        <button className="button" disabled={busy} onClick={() => save("needs_info")}>Needs information</button>
-        <button className="button" disabled={busy} onClick={() => save("dismissed")}>Dismiss</button>
-        {entry.status === "confirmed" && <button className="button" disabled={busy} onClick={() => save("retracted")}>Retract</button>}
-        {entry.status !== "pending" && <button className="link" disabled={busy} onClick={() => { setNote(""); void save("pending"); }}>Reset</button>}
+        {entry.status === "proposed" && officer && !mine && <button className="button primary" disabled={busy} onClick={() => save("confirmed")}>Confirm</button>}
+        {entry.status === "proposed" && officer && !mine && <button className="button" disabled={busy} onClick={() => save("pending")}>Return to draft</button>}
+        {(entry.status === "pending" || entry.status === "needs_info") && <button className="button primary" disabled={busy} onClick={() => save("proposed")}>Propose for confirmation</button>}
+        {entry.status !== "confirmed" && !closed && entry.status !== "needs_info" && <button className="button" disabled={busy} onClick={() => save("needs_info")}>Needs information</button>}
+        {entry.status !== "confirmed" && !closed && <button className="button" disabled={busy} onClick={() => save("dismissed")}>Dismiss</button>}
+        {entry.status === "confirmed" && officer && <button className="button" disabled={busy} onClick={() => save("retracted")}>Retract</button>}
+        {(closed || (entry.status === "needs_info")) && <button className="link" disabled={busy} onClick={() => { setNote(""); void save("pending"); }}>Reset to draft</button>}
       </div>
+      {entry.status === "proposed" && (mine || !officer) && (
+        <p className="meta">{mine ? "You proposed this alert; a different approving officer must confirm it." : "Waiting for an approving officer to confirm."}</p>
+      )}
       {entry.reviewed_utc && <p className="meta">{REVIEW_LABEL[entry.status]} by {entry.reviewed_by} {entry.reviewed_utc} UTC</p>}
       {(entry.history?.length ?? 0) > 1 && (
         <details className="meta"><summary>History ({entry.history!.length})</summary>
@@ -127,7 +129,7 @@ function ReviewCard({ alert, index, entry, context, onReview }: {
 
 function ExportBar({ aid, hasDismissed }: { aid: string; hasDismissed: boolean }) {
   const [withDismissed, setWithDismissed] = useState(false);
-  const include = withDismissed ? "pending,confirmed,needs_info,dismissed,retracted" : undefined;
+  const include = withDismissed ? "pending,proposed,confirmed,needs_info,dismissed,retracted" : undefined;
   return (
     <div className="export-bar">
       <span className="subtle">Export alerts</span>
@@ -139,7 +141,7 @@ function ExportBar({ aid, hasDismissed }: { aid: string; hasDismissed: boolean }
   );
 }
 
-export default function AlertsPanel({ assessment: a, loading, onAlert, alertId, reviews, onReview, context }: Props) {
+export default function AlertsPanel({ assessment: a, loading, onAlert, alertId, reviews, onReview, context, user }: Props) {
   if (!a || a.kind !== "area") {
     return <section><p className="empty-note">{loading ? "Detecting damage…" : "Select a tile or an upload to detect damage."}</p></section>;
   }
@@ -185,13 +187,14 @@ export default function AlertsPanel({ assessment: a, loading, onAlert, alertId, 
             </tbody>
           </table>
         ) : <p className="empty-note" style={{ marginTop: 8 }}>No area meets the alert rule {upload ? "in this image" : "on this tile"}.</p>}
-        {selIndex >= 0 && <ReviewCard alert={alerts[selIndex]} index={selIndex + 1} entry={entryOf(alerts[selIndex].alert_id)} context={context} onReview={onReview} />}
+        {selIndex >= 0 && <ReviewCard alert={alerts[selIndex]} index={selIndex + 1} entry={entryOf(alerts[selIndex].alert_id)} context={context} onReview={onReview} user={user} />}
         <p className="meta" style={{ marginTop: 10 }}>
           An alert is raised for at least 250 m² of severely damaged roof with damage within 30 m; high when at least half
           of the building area there is severely damaged. Click a row to zoom and review it; alerts stay drafts until confirmed.
-          {counts && alerts.length > 0 && <> Review: {counts.confirmed} confirmed, {counts.needs_info} need information, {counts.pending} draft, {counts.dismissed} dismissed.</>}
+          {counts && alerts.length > 0 && <> Review: {counts.confirmed} confirmed, {counts.proposed} awaiting approval, {counts.needs_info} need information, {counts.pending} draft, {counts.dismissed} dismissed.</>}
         </p>
-        {alerts.length > 0 && <ExportBar aid={a.id} hasDismissed={((counts?.dismissed ?? 0) + (counts?.retracted ?? 0)) > 0} />}
+        {alerts.length > 0 && !can(user, "export") && <p className="meta">Exports need an approving officer.</p>}
+        {alerts.length > 0 && can(user, "export") && <ExportBar aid={a.id} hasDismissed={((counts?.dismissed ?? 0) + (counts?.retracted ?? 0)) > 0} />}
         {(a.gates ?? []).some((g) => g.level === "warn") && (
           <ul className="context gates">{(a.gates ?? []).filter((g) => g.level === "warn").map((g) => <li key={g.code} className="flag">{g.message}</li>)}</ul>
         )}

@@ -26,7 +26,7 @@ from models import Paired, PostOnly  # noqa: E402
 
 XBD = ROOT / "data" / "xbd"
 LABEL_IDS = {"no-damage": 0, "minor-damage": 1, "major-damage": 2, "destroyed": 3}
-REVIEW_CONFIDENCE = 0.6       # below this max class probability a building is flagged for review
+REVIEW_CONFIDENCE = 0.7       # below this max class probability a building is flagged for review (E17: keeps ~59% of building pixels at 4-6% error)
 MIN_LOCALIZED = 0.2           # U-Net: share of the footprint that must be predicted as building
 _LOCK = threading.Lock()      # one inference at a time: the app never stacks jobs on the server
 

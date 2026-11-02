@@ -7,15 +7,40 @@ import re
 import shutil
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import audit, context, engines, events, geocal, geoimage, report, reviews, service, uploads
+from . import accounts, audit, auth, context, engines, events, geocal, geoimage, report, reviews, service, uploads
 from .scenes import catalogue, image_jpeg, scene
 
-app = FastAPI(title="EnviroSense damage assessment", version="0.1")
+
+
+async def authenticate(request: Request):
+    """Every /api route needs a rule in auth.POLICY and a signed-in user whose role holds the permission (deny by default)."""
+    path = request.url.path
+    if not path.startswith("/api"):
+        return
+    perm = auth.required(request.method, path)
+    if perm is None:
+        raise HTTPException(403, "no access rule exists for this route")
+    if perm == "public":
+        return
+    bearer = request.headers.get("authorization", "")
+    user = auth.user_from_token(request.cookies.get(auth.COOKIE) or (bearer[7:] if bearer.lower().startswith("bearer ") else None))
+    if user is None:
+        raise HTTPException(401, "sign in required")
+    if user.get("must_change") and path not in ("/api/auth/me", "/api/auth/password"):
+        raise HTTPException(403, "change your temporary password first")
+    auth.set_current(user)
+    if not auth.can(user, perm):
+        audit.log("denied", user["username"], method=request.method, path=path, needed=perm)
+        raise HTTPException(403, f"your role ({user['role']}) may not do this")
+
+
+app = FastAPI(title="EnviroSense damage assessment", version="0.1", dependencies=[Depends(authenticate)])
+app.include_router(accounts.router)
 WEB = Path(__file__).resolve().parents[1] / "web" / "dist"
 
 
@@ -26,6 +51,8 @@ class AssessRequest(BaseModel):
 
 
 def known_scene(pair_id):
+    if not auth.in_scope(pair_id):
+        raise HTTPException(404, f"unknown scene {pair_id}")
     try:
         return scene(pair_id)
     except KeyError:
@@ -123,6 +150,7 @@ async def create_upload(after: UploadFile = File(...), before: UploadFile | None
     if has_before and before_bounds is None and not is_tif(before) and bounds is None:
         raise HTTPException(400, "a plain before image needs its own corner coordinates (before_west, before_south, before_east, before_north)")
     uid, d = uploads.new_folder()
+    auth.register_owner(uid)
     try:
         a = await save_upload(after, d, "after_input")
         b = await save_upload(before, d, "before_input") if has_before else None
@@ -137,11 +165,13 @@ async def create_upload(after: UploadFile = File(...), before: UploadFile | None
 
 @app.get("/api/uploads")
 def get_uploads():
-    return uploads.list_uploads()
+    return [u for u in uploads.list_uploads() if auth.in_scope(u["id"])]
 
 
 @app.get("/api/uploads/{uid}")
 def get_upload(uid: str):
+    if not auth.in_scope(uid):
+        raise HTTPException(404, f"no upload {uid}")
     try:
         return uploads.info(uid)
     except KeyError:
@@ -156,6 +186,8 @@ class UploadEdit(BaseModel):
 
 @app.patch("/api/uploads/{uid}")
 def edit_upload(uid: str, body: UploadEdit):
+    if not auth.in_scope(uid):
+        raise HTTPException(404, f"no upload {uid}")
     try:
         return uploads.update(uid, body.name, body.disaster_type, body.event_date)
     except KeyError:
@@ -165,14 +197,19 @@ def edit_upload(uid: str, body: UploadEdit):
 
 
 @app.delete("/api/uploads/{uid}")
-def delete_upload(uid: str, x_reviewer: str | None = Header(None)):
+def delete_upload(uid: str):
+    u = auth.current()
+    if not auth.in_scope(uid):
+        raise HTTPException(404, f"no upload {uid}")
+    if u["role"] != "officer" and (auth.owners().get(uid) or {}).get("by") != u["username"]:
+        raise HTTPException(403, "an analyst can delete only their own uploads; an approving officer can delete any in their unit tree")
     try:
         uploads.delete(uid)
     except KeyError:
         raise HTTPException(404, f"no upload {uid}")
     except uploads.imagery.ImageryError as e:
         raise HTTPException(409, str(e))
-    audit.log("delete_upload", x_reviewer, uid)
+    audit.log("delete_upload", auth.actor(), uid)
     return {"deleted": uid}
 
 
@@ -188,7 +225,6 @@ def area_record_or_404(aid):
 class ReviewBody(BaseModel):
     status: str
     note: str = ""
-    reviewer: str = ""
 
 
 @app.get("/api/assessments/{aid}/reviews")
@@ -202,12 +238,16 @@ def get_reviews(aid: str):
 def put_review(aid: str, alert_id: str, body: ReviewBody):
     rec = area_record_or_404(aid)
     try:
-        e = reviews.set_review(aid, rec, alert_id, body.status, body.note, body.reviewer)
+        u = auth.current()
+        e = reviews.set_review(aid, rec, alert_id, body.status, body.note, u["username"], u["role"], u["unit"])
+    except PermissionError as err:
+        audit.log("denied", auth.actor(), aid, alert_id=alert_id, status=body.status, why=str(err))
+        raise HTTPException(403, str(err))
     except KeyError:
         raise HTTPException(404, f"no alert {alert_id} in {aid}")
     except reviews.ReviewError as err:
         raise HTTPException(400, str(err))
-    audit.log("review", body.reviewer, aid, alert_id=alert_id, status=body.status, note=body.note, model=rec["model"].get("id"),
+    audit.log("review", auth.actor(), aid, alert_id=alert_id, status=body.status, note=body.note, model=rec["model"].get("id"),
               checkpoint_sha256=(rec.get("provenance") or {}).get("checkpoint", {}).get("sha256"))
     return {"alert_id": alert_id, **e, "counts": reviews.counts(rec, reviews.load(aid))}
 
@@ -222,7 +262,7 @@ def _cached_context(aid):
 
 
 @app.get("/api/assessments/{aid}/export.geojson")
-def export_geojson(aid: str, layer: str = "alerts", include: str | None = None, by: str | None = None):
+def export_geojson(aid: str, layer: str = "alerts", include: str | None = None):
     """Alerts (default) or detected structures as GeoJSON (EPSG:4326). include = comma-separated review statuses;
     dismissed alerts are left out unless listed."""
     rec = area_record_or_404(aid)
@@ -233,19 +273,19 @@ def export_geojson(aid: str, layer: str = "alerts", include: str | None = None, 
                 else reviews.structures_geojson(rec))
     except reviews.ReviewError as e:
         raise HTTPException(400, str(e))
-    audit.log("export", by, aid, kind=f"{layer}.geojson", include=include)
+    audit.log("export", auth.actor(), aid, kind=f"{layer}.geojson", include=include)
     return JSONResponse(data, media_type="application/geo+json",
                         headers={"Content-Disposition": f'attachment; filename="{layer}_{aid}.geojson"'})
 
 
 @app.get("/api/assessments/{aid}/export.csv", response_class=PlainTextResponse)
-def export_csv(aid: str, include: str | None = None, by: str | None = None):
+def export_csv(aid: str, include: str | None = None):
     rec = area_record_or_404(aid)
     try:
         text = reviews.alerts_csv(rec, reviews.load(aid), _include(include), _cached_context(aid))
     except reviews.ReviewError as e:
         raise HTTPException(400, str(e))
-    audit.log("export", by, aid, kind="alerts.csv", include=include)
+    audit.log("export", auth.actor(), aid, kind="alerts.csv", include=include)
     return PlainTextResponse(text, media_type="text/csv", headers={"Content-Disposition": f'attachment; filename="alerts_{aid}.csv"'})
 
 
@@ -266,13 +306,23 @@ def get_policy():
 @app.on_event("startup")
 def _retention():
     uploads.purge_expired()
+    auth.bootstrap()
+    top = next((k for k, v in auth.units().items() if v.get("parent") is None), None)
+    for d in (uploads.UPLOADS.iterdir() if uploads.UPLOADS.exists() else []):
+        if top and uploads.is_upload(d.name):
+            auth.adopt(d.name, top)
 
 
 # ---- audit ------------------------------------------------------------------------------------------------------
 
 @app.get("/api/audit")
 def get_audit(assessment: str | None = None, limit: int = 200):
-    return audit.read(assessment, min(max(limit, 1), 1000))
+    """Entries from the caller's unit tree; entries from before accounts existed show only to the top unit."""
+    u = auth.current()
+    vis, top = auth.visible_units(u), auth.units().get(u["unit"], {}).get("parent") is None
+    rows = [r for r in audit.read(assessment, 100000)
+            if (r["detail"].get("actor_unit") in vis if r["detail"].get("actor_unit") else top)]
+    return rows[-min(max(limit, 1), 1000):]
 
 
 @app.get("/api/audit/verify")
@@ -295,7 +345,7 @@ def get_geo_offset(aid: str):
 
 
 @app.put("/api/assessments/{aid}/geo-offset")
-def put_geo_offset(aid: str, body: GeoOffset, x_reviewer: str | None = Header(None)):
+def put_geo_offset(aid: str, body: GeoOffset):
     """Move image, outlines and alerts of an assessment on the street map (east / north in metres from the file's own georeference)."""
     path = stored(aid)
     rec = json.loads(path.read_text())
@@ -307,7 +357,7 @@ def put_geo_offset(aid: str, body: GeoOffset, x_reviewer: str | None = Header(No
         raise HTTPException(400, str(e))
     path.write_text(json.dumps(rec))
     context.invalidate(aid)
-    audit.log("map_offset", x_reviewer, aid, east_m=body.east_m, north_m=body.north_m, method=body.method, note=body.note)
+    audit.log("map_offset", auth.actor(), aid, east_m=body.east_m, north_m=body.north_m, method=body.method, note=body.note)
     return entry
 
 
@@ -376,7 +426,7 @@ def run_assessment(req: AssessRequest):
 
 
 @app.post("/api/assess-area")
-def run_area_assessment(req: AssessRequest, x_reviewer: str | None = Header(None)):
+def run_area_assessment(req: AssessRequest):
     """Footprint-free mode: structures detected from the image, one alert per cluster of severe damage."""
     known_scene(req.pair_id)
     if req.model_id not in service.models():
@@ -384,7 +434,7 @@ def run_area_assessment(req: AssessRequest, x_reviewer: str | None = Header(None
     if service.models()[req.model_id]["kind"] != "unet":
         raise HTTPException(400, "area alerts need a full-image U-Net model")
     rec = service.assess_area(req.pair_id, req.model_id, req.force)
-    audit.log("assess", x_reviewer, rec["id"], pair_id=req.pair_id, model=req.model_id, forced=req.force,
+    audit.log("assess", auth.actor(), rec["id"], pair_id=req.pair_id, model=req.model_id, forced=req.force,
               checkpoint_sha256=(rec.get("provenance") or {}).get("checkpoint", {}).get("sha256"))
     return {"id": rec["id"], "pair_id": rec["pair_id"], "model": rec["model"], "alerts": len(rec["alerts"]),
             "summary": rec["summary"], "created_utc": rec["created_utc"]}
@@ -402,6 +452,8 @@ def get_feature_crop(aid: str, fid: str, phase: str):
 
 
 def stored(aid):
+    if not auth.in_scope(aid):
+        raise HTTPException(404, f"no assessment {aid}; POST /api/assess first")
     path = service.STORE / f"{aid}.json"
     if not path.exists():
         raise HTTPException(404, f"no assessment {aid}; POST /api/assess first")

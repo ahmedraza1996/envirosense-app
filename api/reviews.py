@@ -17,7 +17,8 @@ from datetime import datetime, timezone
 from .engines import ROOT
 
 STORE = ROOT / "runs" / "app" / "reviews"
-STATUSES = ("pending", "confirmed", "dismissed", "needs_info", "retracted")
+STATUSES = ("pending", "proposed", "confirmed", "dismissed", "needs_info", "retracted")
+DEFAULT_INCLUDE = ("pending", "proposed", "confirmed", "needs_info")
 NOTE_MAX = 500
 _lock = threading.Lock()
 
@@ -35,7 +36,8 @@ def load(aid: str) -> dict:
     return json.loads(p.read_text()) if p.exists() else {"alerts": {}}
 
 
-def set_review(aid: str, rec: dict, alert_id: str, status: str, note: str = "", by: str = "") -> dict:
+def set_review(aid: str, rec: dict, alert_id: str, status: str, note: str = "", by: str = "", role: str = "officer", unit: str = "") -> dict:
+    """Four-eyes rule: only an officer confirms, and only an alert another person proposed. An analyst proposes, dismisses or asks for information."""
     if status not in STATUSES:
         raise ReviewError(f"status must be one of {', '.join(STATUSES)}")
     if not any(a["alert_id"] == alert_id for a in rec.get("alerts") or []):
@@ -43,7 +45,9 @@ def set_review(aid: str, rec: dict, alert_id: str, status: str, note: str = "", 
     by = (by or "").strip()
     note = (note or "").strip()
     if not by:
-        raise ReviewError("a reviewer name is required")
+        raise ReviewError("a reviewer is required")
+    if role not in ("analyst", "officer"):
+        raise PermissionError("this role cannot review alerts")
     if len(note) > NOTE_MAX:
         raise ReviewError(f"note is limited to {NOTE_MAX} characters")
     if status in ("dismissed", "retracted") and not note:
@@ -53,11 +57,21 @@ def set_review(aid: str, rec: dict, alert_id: str, status: str, note: str = "", 
         old = data["alerts"].get(alert_id) or {}
         if status == "retracted" and old.get("status") != "confirmed":
             raise ReviewError("only a confirmed alert can be retracted")
+        if status in ("confirmed", "retracted") and role != "officer":
+            raise PermissionError(f"only an approving officer can {'confirm' if status == 'confirmed' else 'retract'} an alert")
+        if status == "confirmed":
+            if old.get("status") != "proposed":
+                raise ReviewError("an alert is confirmed from a proposal: someone proposes it first, then an officer confirms")
+            if old.get("proposed_by") == by:
+                raise ReviewError("you proposed this alert yourself; a different officer must confirm it")
+        if old.get("status") == "proposed" and status == "pending" and not note:
+            raise ReviewError("a reason is required to return a proposal")
         utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         history = list(old.get("history") or [])
-        history.append({"status": status, "note": note, "by": by, "utc": utc})
+        history.append({"status": status, "note": note, "by": by, "role": role, "unit": unit, "utc": utc})
         entry = {"status": status, "note": note, "reviewed_by": None if status == "pending" else by,
-                 "reviewed_utc": None if status == "pending" else utc, "history": history}
+                 "reviewed_utc": None if status == "pending" else utc, "history": history,
+                 "proposed_by": by if status == "proposed" else (old.get("proposed_by") if status == "confirmed" else None)}
         data["alerts"][alert_id] = entry
         STORE.mkdir(parents=True, exist_ok=True)
         tmp = _path(aid).with_suffix(".tmp")
@@ -78,7 +92,7 @@ def counts(rec: dict, reviews: dict) -> dict:
 
 
 def _keep(rec, reviews, include):
-    inc = set(include or ("pending", "confirmed", "needs_info"))
+    inc = set(include or DEFAULT_INCLUDE)
     bad = inc - set(STATUSES)
     if bad:
         raise ReviewError(f"unknown status {', '.join(sorted(bad))}")
@@ -114,7 +128,7 @@ def alerts_geojson(rec: dict, reviews: dict, include=None, context: dict | None 
                           [(sc.get("geo_offset_m") or {}).get("east"), (sc.get("geo_offset_m") or {}).get("north")] or None}})
     return {"type": "FeatureCollection", "name": f"alerts_{rec['id']}",
             "properties": {"event": _title(sc), "assessment_id": rec["id"], "model": rec["model"]["label"],
-                           "rule": rec.get("alert_rule"), "status_included": sorted(set(include or ("pending", "confirmed", "needs_info"))),
+                           "rule": rec.get("alert_rule"), "status_included": sorted(set(include or DEFAULT_INCLUDE)),
                            "note": "DRAFT: model output awaiting analyst review unless review_status says otherwise. Visible damage only; verify in the field. "
                                    "Not for dispatch or safety decisions (governance/intended_use.md).",
                            "gates": rec.get("gates") or [], "provenance": rec.get("provenance")},

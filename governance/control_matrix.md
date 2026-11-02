@@ -38,7 +38,13 @@ OECD AI Principles; OCHA Data Responsibility Guidelines. Work packages (WP) are 
 | M2 | Monitoring | Input-quality summary per upload | planned | upload QA | MEASURE |
 | I1 | Incidents | Retraction of an alert; incident log; report revision | partial (retraction with reason and history exists; separate incident procedure to write) | `api/reviews.py`; `tests/test_governance.py` | MANAGE; redressability |
 | I2 | Incidents | Incident drill | planned (WP-G3) | drill record | MANAGE |
+| A1 | Access | Sign-in with individual accounts; hashed passwords; lock-out after 5 failed attempts; temporary passwords must be changed | in place | `api/auth.py`, `api/accounts.py`; `tests/test_access.py` | GOVERN; Art. 14; accountability |
+| A2 | Access | Roles (administrator, analyst, approving officer, auditor); deny-by-default permission table, one rule per route | in place | `auth.POLICY`, `authenticate` in `api/main.py`; `test_sign_in_is_required_and_every_route_has_a_rule`, `test_roles_limit_what_each_user_can_do` | GOVERN; Art. 14 |
+| A3 | Access | Organisation tree: users see and act only on their own unit and the units below; siblings are separated | in place | `auth.in_scope`, `visible_units`; `test_uploads_are_visible_only_inside_the_owner_unit_tree`, `test_audit_log_is_scoped_to_the_callers_unit_tree` | GOVERN; OCHA data responsibility |
+| A4 | Oversight | Four-eyes confirmation: an analyst proposes, a different approving officer confirms; only an officer retracts or exports | in place | `reviews.set_review`; `test_review_needs_name_and_reason_and_keeps_history`, `test_roles_limit_what_each_user_can_do` | MANAGE; Art. 14 human oversight |
+| A5 | Audit | Every action is recorded against the signed-in account with its unit and role; denied attempts and failed sign-ins are logged | in place | `audit.log`, `accounts.py`; `test_login_logout_lockout_and_password_rules` | Art. 12; auditability |
+| A6 | Change control | Only an administrator changes the approved model, with a reason; the change is written to the decision log and the audit log | in place | `PUT /api/admin/approved-model`; `test_only_an_administrator_changes_the_approved_model_and_it_is_logged` | GOVERN; ISO 42001 change control |
 | X1 | Audit | Append-only audit log with hash chain | in place | `api/audit.py`, `GET /api/audit/verify`; `tests/test_governance.py` | Art. 12; auditability |
 | X2 | Assurance | Traceability test, documentation completeness, gate tests, accountability metrics | planned (WP-G3) | `tests/test_governance.py`; assurance report | SMACTR testing; MEASURE |
 
-Count (2 Nov 2026): 34 controls; in place 18 (G1 to G3 are drafts awaiting supervisor review), draft 2, partial 6, planned 8.
+Count (2 Nov 2026): 40 controls; in place 24 (G1 to G3 are drafts awaiting supervisor review), draft 2, partial 6, planned 8. A1 to A6 added with the multi-user access system; not security-tested (no penetration test, no TLS inside the app).

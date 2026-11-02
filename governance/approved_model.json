@@ -1,7 +1,7 @@
 {
-  "default_model": "unet_paired_ext",
+  "default_model": "unet_paired_mis",
   "approved_utc": "2026-11-02",
-  "approved_by": "principal investigator (pinned while the default is reviewed)",
-  "reason": "E14 was the default when the demo set and its README numbers were produced. E15 (unet_paired_mis) has a higher test score (0.625 against 0.591) and flatter robustness but slightly lower destroyed-class F1 and localisation; switching the default needs an approval entry in governance/decision_log.md and a re-run of the demo set.",
-  "candidate": "unet_paired_mis"
+  "approved_by": "principal investigator (supervisor sign-off pending)",
+  "reason": "E15 (unet_paired_mis) has the higher test and hold scores (0.625 and 0.644 against 0.591 and 0.623) and flatter robustness to misregistration. It has slightly lower destroyed-class F1 (0.64 against 0.67) and localisation (0.776 against 0.787). The demo set and README numbers still come from E14 and are to be re-run.",
+  "previous": "unet_paired_ext"
 }

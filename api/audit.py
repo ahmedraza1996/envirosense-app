@@ -2,7 +2,7 @@
 
 One JSON line per action that changes something or releases something: assessment, review, retraction, export, map offset,
 upload, delete, model approval. Each line carries the hash of the previous line, so a removed or edited line breaks the chain and
-`verify` says where. It records who did it (the reviewer name sent by the interface), when, to which assessment, and the
+`verify` says where. It records who did it (the signed-in account, with its unit and role), when, to which assessment, and the
 versions involved. It is a record for accountability on a research prototype, not a security product: anyone with access to
 the server's files can rewrite the whole chain.
 """
@@ -11,6 +11,7 @@ import json
 import threading
 from datetime import datetime, timezone
 
+from . import auth
 from .engines import ROOT
 
 PATH = ROOT / "runs" / "app" / "audit" / "audit.jsonl"
@@ -34,6 +35,10 @@ def _last() -> tuple[int, str]:
 
 
 def log(action: str, actor: str | None, assessment: str | None = None, **detail) -> dict:
+    u = auth.current()
+    if u:                                   # who, from which unit and in which role: for scoping what an administrator or auditor sees
+        detail.setdefault("actor_unit", u["unit"])
+        detail.setdefault("actor_role", u["role"])
     with _lock:
         seq, prev = _last()
         entry = {"seq": seq + 1, "utc": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"), "action": action,

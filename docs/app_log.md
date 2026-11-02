@@ -188,3 +188,13 @@ Tests: 42 pass (7 new in `tests/test_governance.py`, which also covers the appro
 - Upload retention rule and notice: `governance/retention.json`, `GET /api/policy`, notice in the upload dialog; with `upload_retention_days` set, expired uploads are deleted at start-up and logged to the audit log. Default: no automatic deletion.
 - `scripts/measure_offset_study.py` (X8) runs the Align measurement on 3 tiles per event of the hold split.
 - Tests: 9 in `tests/test_governance.py`; the full suite has 44 tests. `test_uploads.py::test_plain_pair_with_its_own_before_corners` failed once when the server was running three other jobs and passed alone; it waits on the background worker.
+
+## A13 Multi-user access: accounts, units, roles, four-eyes confirmation (2026-11-02)
+- Default model changed to E15 (`unet_paired_mis`) and the review threshold raised from 0.6 to 0.7 (decision log; E17 coverage-risk). The demo set and README numbers still come from E14 and are to be re-run.
+- `api/auth.py`: users and an organisation tree of units (`runs/app/auth/`), scrypt password hashes, signed session tokens (cookie, or Bearer header for scripts), lock-out after 5 failed attempts, temporary passwords that must be changed, first administrator from `ENVIROSENSE_ADMIN_PASSWORD` or a generated password in `runs/app/auth/first_admin.txt`.
+- Roles: administrator, analyst, approving officer, auditor. One permission rule per route (`auth.POLICY`); a route without a rule is refused, and a test enumerates the routes.
+- Scope: uploads belong to the unit of the uploader; a user sees their unit and the units below, never siblings. Benchmark tiles are shared. Uploads made before accounts existed were adopted by the top unit.
+- Review: an analyst *proposes*; a different approving officer *confirms*; only an officer retracts or exports. Reviewer identity now comes from the account; the typed name field is gone.
+- Administration screens (users, units, approved model) and an audit view with chain verification; header shows who is signed in with unit and role.
+- `scripts/seed_demo_accounts.py` creates a demonstration organisation (passwords in `runs/app/auth/demo_accounts.txt`).
+- Tests: 53 pass (9 new in `tests/test_access.py`). Not security-tested: no TLS inside the app (the SSH tunnel carries it), no rate limit beyond the per-user lock-out, no penetration test.

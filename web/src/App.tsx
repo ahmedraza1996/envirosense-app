@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { Alert, api, Assessment, bestUnet, Context, EventSummary, ModelInfo, Reviews, ReviewStatus, Scene, tileNo, titleCase, Upload } from "./api";
+import { Alert, api, Assessment, bestUnet, Context, EventSummary, ModelInfo, Reviews, ReviewStatus, Scene, tileNo, titleCase, Upload, User } from "./api";
+import { AccountChip } from "./components/Account";
 import ScenePanel from "./components/ScenePanel";
 import UploadPanel from "./components/UploadPanel";
 import UploadDialog from "./components/UploadDialog";
@@ -21,7 +22,7 @@ const preferred = (models: ModelInfo[], mode: Mode) =>
 
 const pending = (u: Upload) => u.status.state === "queued" || u.status.state === "running";
 
-export default function App() {
+export function Workspace({ user, onUser, onSignOut }: { user: User; onUser: (u: User) => void; onSignOut: () => void }) {
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [mode, setMode] = useState<Mode>("area");
   const [modelId, setModelId] = useState<string | null>(null);
@@ -141,7 +142,7 @@ export default function App() {
   const review = async (id: string, status: ReviewStatus, note: string) => {
     if (!aid) return;
     const e = await api.review(aid, id, status, note);
-    setReviews((r) => r && { alerts: { ...r.alerts, [id]: { status: e.status, note: e.note, reviewed_by: e.reviewed_by, reviewed_utc: e.reviewed_utc } }, counts: e.counts });
+    setReviews((r) => r && { alerts: { ...r.alerts, [id]: { status: e.status, note: e.note, reviewed_by: e.reviewed_by, reviewed_utc: e.reviewed_utc, history: e.history, proposed_by: e.proposed_by } }, counts: e.counts });
   };
 
   const rename = async (id: string, name: string) => {
@@ -211,6 +212,7 @@ export default function App() {
             </select>
           )}
         </label>
+        <AccountChip user={user} onSignOut={onSignOut} onUser={onUser} />
       </header>
       <div className="body">
         <nav className="sidebar" aria-label="Imagery">
@@ -243,7 +245,7 @@ export default function App() {
                 <BuildingInspector assessment={assessment} feature={building} onBack={() => setSelected(null)} />
               ) : mode === "area" ? (
                 <AlertsPanel assessment={assessment} loading={loading || (!!upload && pending(upload))} onAlert={openAlert}
-                  alertId={alertId} reviews={reviews} onReview={review} context={context} />
+                  alertId={alertId} reviews={reviews} onReview={review} context={context} user={user} />
               ) : (
                 <SummaryPanel assessment={assessment} loading={loading} onZone={zoomTo} onBuilding={setSelected} />
               )}

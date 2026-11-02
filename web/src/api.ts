@@ -52,18 +52,14 @@ export interface Upload {
   status: { state: "queued" | "running" | "done" | "failed"; step?: string; error?: string; assessment_id?: string; alerts?: number };
 }
 
-export type ReviewStatus = "pending" | "confirmed" | "dismissed" | "needs_info" | "retracted";
+export type ReviewStatus = "pending" | "proposed" | "confirmed" | "dismissed" | "needs_info" | "retracted";
 export const REVIEW_LABEL: Record<ReviewStatus, string> = {
-  pending: "Draft", confirmed: "Confirmed", dismissed: "Dismissed", needs_info: "Needs information", retracted: "Retracted",
+  pending: "Draft", proposed: "Awaiting approval", confirmed: "Confirmed", dismissed: "Dismissed", needs_info: "Needs information", retracted: "Retracted",
 };
-export interface ReviewHistoryItem { status: ReviewStatus; note: string; by: string; utc: string }
-export interface ReviewEntry { status: ReviewStatus; note: string; reviewed_by: string | null; reviewed_utc: string | null; history?: ReviewHistoryItem[] }
+export interface ReviewHistoryItem { status: ReviewStatus; note: string; by: string; utc: string; role?: string }
+export interface ReviewEntry { status: ReviewStatus; note: string; reviewed_by: string | null; reviewed_utc: string | null; history?: ReviewHistoryItem[]; proposed_by?: string | null }
 export interface Gate { code: string; level: "info" | "warn"; message: string }
 
-/** Name of the person using the tool: stored in the browser, sent with every decision and recorded in the audit log. */
-export const reviewerName = () => { try { return localStorage.getItem("reviewer") ?? ""; } catch { return ""; } };
-export const setReviewerName = (n: string) => { try { localStorage.setItem("reviewer", n); } catch { /* no storage */ } };
-const actor = () => ({ "X-Reviewer": reviewerName() });
 export interface Reviews { alerts: Record<string, ReviewEntry>; counts: Record<ReviewStatus, number> }
 
 export interface AlertContext {
@@ -142,6 +138,7 @@ export interface Assessment {
 }
 
 async function json<T>(r: Response): Promise<T> {
+  if (r.status === 401) window.dispatchEvent(new Event("auth-expired"));
   if (!r.ok) {
     const text = await r.text();
     let detail = text;
@@ -157,35 +154,35 @@ export const api = {
   scenes: (split = "hold") => fetch(`/api/scenes?split=${split}`).then(json<{ disasters: string[]; scenes: Scene[] }>),
   assess: async (pair_id: string, model_id: string): Promise<Assessment> => {
     const r = await fetch("/api/assess", {
-      method: "POST", headers: { "Content-Type": "application/json", ...actor() }, body: JSON.stringify({ pair_id, model_id }),
+      method: "POST", headers: { "Content-Type": "application/json", }, body: JSON.stringify({ pair_id, model_id }),
     }).then(json<{ id: string }>);
     return fetch(`/api/assessments/${r.id}`).then(json<Assessment>);
   },
   assessArea: async (pair_id: string, model_id: string): Promise<Assessment> => {
     const r = await fetch("/api/assess-area", {
-      method: "POST", headers: { "Content-Type": "application/json", ...actor() }, body: JSON.stringify({ pair_id, model_id }),
+      method: "POST", headers: { "Content-Type": "application/json", }, body: JSON.stringify({ pair_id, model_id }),
     }).then(json<{ id: string }>);
     return fetch(`/api/assessments/${r.id}`).then(json<Assessment>);
   },
   setGeoOffset: (aid: string, east_m: number, north_m: number, method: string, note?: string) =>
-    fetch(`/api/assessments/${aid}/geo-offset`, { method: "PUT", headers: { "Content-Type": "application/json", ...actor() }, body: JSON.stringify({ east_m, north_m, method, note }) }).then(json<GeoOffset>),
+    fetch(`/api/assessments/${aid}/geo-offset`, { method: "PUT", headers: { "Content-Type": "application/json", }, body: JSON.stringify({ east_m, north_m, method, note }) }).then(json<GeoOffset>),
   measureGeoOffset: (aid: string) => fetch(`/api/assessments/${aid}/geo-offset/measure`, { method: "POST" }).then(json<GeoSuggestion>),
   assessment: (aid: string) => fetch(`/api/assessments/${aid}`).then(json<Assessment>),
   policy: () => fetch("/api/policy").then(json<{ upload_retention_days: number | null; notice: string }>),
   uploads: () => fetch("/api/uploads").then(json<Upload[]>),
-  upload: (form: FormData) => fetch("/api/uploads", { method: "POST", headers: actor(), body: form }).then(json<Upload>),
+  upload: (form: FormData) => fetch("/api/uploads", { method: "POST", body: form }).then(json<Upload>),
   reviews: (aid: string) => fetch(`/api/assessments/${aid}/reviews`).then(json<Reviews>),
   review: (aid: string, alertId: string, status: ReviewStatus, note: string) =>
     fetch(`/api/assessments/${aid}/alerts/${alertId}/review`, {
-      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status, note, reviewer: reviewerName() }),
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status, note }),
     }).then(json<ReviewEntry & { counts: Record<ReviewStatus, number> }>),
   context: (aid: string) => fetch(`/api/assessments/${aid}/context`).then(json<Context>),
   exportUrl: (aid: string, kind: "alerts.geojson" | "structures.geojson" | "csv", include?: string) =>
-    kind === "csv" ? `/api/assessments/${aid}/export.csv?by=${encodeURIComponent(reviewerName())}${include ? `&include=${include}` : ""}`
-      : `/api/assessments/${aid}/export.geojson?layer=${kind.split(".")[0]}&by=${encodeURIComponent(reviewerName())}${include ? `&include=${include}` : ""}`,
+    kind === "csv" ? `/api/assessments/${aid}/export.csv${include ? `?include=${include}` : ""}`
+      : `/api/assessments/${aid}/export.geojson?layer=${kind.split(".")[0]}${include ? `&include=${include}` : ""}`,
   editUpload: (id: string, patch: { name?: string; disaster_type?: string; event_date?: string }) =>
-    fetch(`/api/uploads/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json", ...actor() }, body: JSON.stringify(patch) }).then(json<Upload>),
-  deleteUpload: (id: string) => fetch(`/api/uploads/${id}`, { method: "DELETE", headers: actor() }).then(json<{ deleted: string }>),
+    fetch(`/api/uploads/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json", }, body: JSON.stringify(patch) }).then(json<Upload>),
+  deleteUpload: (id: string) => fetch(`/api/uploads/${id}`, { method: "DELETE" }).then(json<{ deleted: string }>),
   events: (model: string) => fetch(`/api/events?model_id=${model}`).then(json<EventSummary[]>),
   event: (disaster: string, model: string) => fetch(`/api/events/${disaster}?model_id=${model}`).then(json<EventDetail>),
   assessEvent: (disaster: string, model_id: string, limit: number) =>
@@ -204,3 +201,36 @@ export const pct = (x: number | undefined, d = 0) => (x === undefined ? "–" : 
 export const titleCase = (s: string) => s.split("-").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
 /** "hurricane-harvey_00000149" -> "00000149" */
 export const tileNo = (pairId: string) => pairId.split("_").pop() ?? pairId;
+
+
+// ---- accounts ---------------------------------------------------------------------------------------------------
+export type Role = "admin" | "analyst" | "officer" | "auditor";
+export interface User {
+  username: string; name: string; role: Role; role_label: string; unit: string; unit_name: string; unit_path: string; active: boolean;
+  must_change_password: boolean; created_utc?: string; last_login_utc?: string | null; permissions: string[]; temporary_password?: string | null;
+}
+export interface UnitInfo { id: string; name: string; parent: string | null; path: string; users: number }
+export interface AuditEntry { seq: number; utc: string; action: string; actor: string; assessment: string | null; detail: Record<string, unknown> }
+export interface ApprovedModel { default_model: string | null; approved_utc?: string; approved_by?: string; reason?: string; previous?: string | null; available?: { id: string; label: string }[] }
+export const can = (u: User, perm: string) => u.permissions.includes(perm);
+
+const send = (method: string, url: string, body?: unknown) =>
+  fetch(url, { method, headers: body === undefined ? undefined : { "Content-Type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
+
+export const accounts = {
+  me: () => fetch("/api/auth/me").then(json<User>),
+  login: (username: string, password: string) => send("POST", "/api/auth/login", { username, password }).then(json<User>),
+  logout: () => send("POST", "/api/auth/logout").then(json<{ ok: boolean }>),
+  changePassword: (current: string, next: string) => send("POST", "/api/auth/password", { current, new: next }).then(json<{ ok: boolean }>),
+  users: () => fetch("/api/admin/users").then(json<User[]>),
+  addUser: (u: { username: string; name: string; role: Role; unit: string; password?: string }) => send("POST", "/api/admin/users", u).then(json<User>),
+  editUser: (username: string, patch: { name?: string; role?: Role; unit?: string; active?: boolean }) => send("PATCH", `/api/admin/users/${username}`, patch).then(json<User>),
+  resetPassword: (username: string) => send("POST", `/api/admin/users/${username}/reset-password`).then(json<{ username: string; temporary_password: string }>),
+  units: () => fetch("/api/admin/units").then(json<UnitInfo[]>),
+  addUnit: (name: string, parent: string) => send("POST", "/api/admin/units", { name, parent }).then(json<UnitInfo>),
+  editUnit: (id: string, patch: { name?: string; parent?: string }) => send("PATCH", `/api/admin/units/${id}`, patch).then(json<UnitInfo>),
+  audit: (limit = 300, assessment?: string) => fetch(`/api/audit?limit=${limit}${assessment ? `&assessment=${encodeURIComponent(assessment)}` : ""}`).then(json<AuditEntry[]>),
+  auditVerify: () => fetch("/api/audit/verify").then(json<{ ok: boolean; entries: number; first_bad_line: number | null; reason: string }>),
+  approvedModel: () => fetch("/api/approved-model").then(json<ApprovedModel>),
+  approveModel: (model_id: string, reason: string) => send("PUT", "/api/admin/approved-model", { model_id, reason }).then(json<ApprovedModel>),
+};

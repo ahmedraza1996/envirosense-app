@@ -54,18 +54,26 @@ REC = {"alerts": [{"alert_id": "AL-1"}, {"alert_id": "AL-2"}]}
 
 def test_review_needs_name_and_reason_and_keeps_history(tmp_path, monkeypatch):
     monkeypatch.setattr(reviews, "STORE", tmp_path / "reviews")
+    off = lambda status, note, by: reviews.set_review("a", REC, "AL-1", status, note, by, "officer", "u_top")
     with pytest.raises(reviews.ReviewError):
-        reviews.set_review("a", REC, "AL-1", "confirmed", "ok", "")                       # no reviewer name
+        off("proposed", "ok", "")                                                          # no reviewer
     with pytest.raises(reviews.ReviewError):
-        reviews.set_review("a", REC, "AL-1", "dismissed", "", "R1")                       # no reason
+        off("dismissed", "", "R1")                                                         # no reason
     with pytest.raises(reviews.ReviewError):
-        reviews.set_review("a", REC, "AL-1", "retracted", "wrong", "R1")                  # only a confirmed alert is retracted
-    reviews.set_review("a", REC, "AL-1", "confirmed", "checked with the fire brigade", "R1")
-    reviews.set_review("a", REC, "AL-1", "needs_info", "second look", "R2")
-    reviews.set_review("a", REC, "AL-1", "confirmed", "verified on site", "R2")
-    e = reviews.set_review("a", REC, "AL-1", "retracted", "site visit found no damage", "R3")
+        off("retracted", "wrong", "R1")                                                    # only a confirmed alert is retracted
+    with pytest.raises(reviews.ReviewError):
+        off("confirmed", "ok", "R1")                                                       # nothing was proposed
+    off("proposed", "checked with the fire brigade", "R1")
+    with pytest.raises(reviews.ReviewError):
+        off("confirmed", "ok", "R1")                                                       # nobody confirms their own proposal
+    off("needs_info", "second look", "R2")
+    off("proposed", "verified on site", "R2")
+    off("confirmed", "agreed", "R3")
+    with pytest.raises(PermissionError):
+        reviews.set_review("a", REC, "AL-1", "retracted", "x", "A1", "analyst", "u_top")  # an analyst cannot retract
+    e = off("retracted", "site visit found no damage", "R3")
     assert e["status"] == "retracted" and e["reviewed_by"] == "R3"
-    assert [(h["status"], h["by"]) for h in e["history"]] == [("confirmed", "R1"), ("needs_info", "R2"), ("confirmed", "R2"), ("retracted", "R3")]
+    assert [(h["status"], h["by"]) for h in e["history"]] == [("proposed", "R1"), ("needs_info", "R2"), ("proposed", "R2"), ("confirmed", "R3"), ("retracted", "R3")]
     assert reviews.counts(REC, reviews.load("a"))["retracted"] == 1
     # retracted alerts leave the default export, like dismissed ones
     rec = {**_scene_rec(), "alerts": [_alert("AL-1"), _alert("AL-2")]}
@@ -111,14 +119,14 @@ def test_provenance_hashes_inputs_and_checkpoint(tmp_path):
     assert p["software"]["python"]
 
 
-def test_review_endpoint_requires_a_name_and_is_audited():
+def test_review_endpoint_logs_nothing_for_an_unknown_assessment(login_as):
     from app.api import audit as _audit
     from app.api import service
     c = TestClient(app)
     # unknown assessment: 404, and nothing is logged for it
-    r = c.put("/api/assessments/nope/alerts/AL-1/review", json={"status": "confirmed", "reviewer": "R1"})
+    r = c.put("/api/assessments/nope/alerts/AL-1/review", json={"status": "proposed"})
     assert r.status_code == 404 and _audit.read() == []
-    assert c.get("/api/audit/verify").json()["ok"] is True
+    assert c.get("/api/audit/verify", headers=login_as("an_auditor", "auditor")).json()["ok"] is True
 
 
 def test_retention_rule_deletes_only_expired_uploads(tmp_path, monkeypatch):
