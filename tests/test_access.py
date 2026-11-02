@@ -147,7 +147,6 @@ def test_administrators_manage_only_their_own_unit_tree(tree):
 def test_audit_log_is_scoped_to_the_callers_unit_tree(tree):
     sindh_admin, pun_admin = mk("sindh_admin", "admin", tree["sindh"]), mk("pun_admin", "admin", tree["punjab"])
     kar = mk("kar_a", "analyst", tree["karachi"])
-    c.get("/api/scenes", headers=kar)
     c.get("/api/admin/users", headers=kar)                     # denied: logged with the Karachi unit
     seen = lambda h: {e["actor"] for e in c.get("/api/audit", headers=h).json()}
     assert "kar_a" in seen(sindh_admin) and "kar_a" not in seen(pun_admin)

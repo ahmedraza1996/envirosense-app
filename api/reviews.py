@@ -123,6 +123,9 @@ def alerts_geojson(rec: dict, reviews: dict, include=None, context: dict | None 
                           "nearest_hospital": c.get("nearest_hospital"), "event": _title(sc),
                           "assessment_id": rec["id"], "model": rec["model"]["label"], "assessed_utc": rec["created_utc"],
                           "checkpoint_sha256": ((rec.get("provenance") or {}).get("checkpoint") or {}).get("sha256"),
+                          "after_sha256": (((rec.get("provenance") or {}).get("inputs") or {}).get("after") or {}).get("sha256"),
+                          "before_sha256": (((rec.get("provenance") or {}).get("inputs") or {}).get("before") or {}).get("sha256"),
+                          "review_confidence": ((rec.get("provenance") or {}).get("thresholds") or {}).get("review_confidence"),
                           "quality_flags": [g["code"] for g in rec.get("gates") or [] if g["level"] == "warn"],
                           "position_offset_m": (sc.get("geo_offset_m") or {}).get("east") is not None and
                           [(sc.get("geo_offset_m") or {}).get("east"), (sc.get("geo_offset_m") or {}).get("north")] or None}})
@@ -153,7 +156,7 @@ def structures_geojson(rec: dict) -> dict:
 
 CSV_COLUMNS = ["number", "alert_id", "severity", "review_status", "review_note", "reviewed_utc", "centroid_lat", "centroid_lon",
                "severe_roof_m2", "building_area_m2", "severe_share", "structures", "severe_structures", "area_m2", "priority", "low_confidence_structures", "low_confidence_share",
-               "context_flags", "nearest_hospital", "nearest_hospital_m", "event", "model", "assessed_utc", "checkpoint_sha256", "quality_flags",
+               "context_flags", "nearest_hospital", "nearest_hospital_m", "event", "model", "assessed_utc", "checkpoint_sha256", "after_sha256", "before_sha256", "review_confidence", "quality_flags",
                "position_offset_m"]
 
 

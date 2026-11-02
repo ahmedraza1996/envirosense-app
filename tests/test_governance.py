@@ -153,3 +153,59 @@ def test_retention_rule_deletes_only_expired_uploads(tmp_path, monkeypatch):
 def test_policy_endpoint_gives_the_upload_notice():
     p = TestClient(app).get("/api/policy").json()
     assert "kept until you delete" in p["notice"] and p["upload_retention_days"] is None
+
+
+# ---- traceability, documentation completeness, incident candidates (controls A3, X2, I1) ----------------------------
+
+def test_exported_alert_traces_to_its_inputs_and_checkpoint():
+    rec = {**_scene_rec(), "alerts": [_alert("AL-1")],
+           "provenance": {"checkpoint": {"sha256": "ab" * 32}, "inputs": {"after": {"sha256": "cd" * 32}, "before": {"sha256": "ef" * 32}},
+                          "thresholds": {"review_confidence": 0.7}}}
+    p = reviews.alerts_geojson(rec, {"alerts": {}})["features"][0]["properties"]
+    assert (p["checkpoint_sha256"], p["after_sha256"], p["before_sha256"], p["review_confidence"]) == ("ab" * 32, "cd" * 32, "ef" * 32, 0.7)
+    row = reviews.alerts_csv(rec, {"alerts": {}}).splitlines()
+    assert {"after_sha256", "before_sha256", "review_confidence"} <= set(row[0].split(",")) and "cd" * 32 in row[1]
+
+
+def test_every_control_in_place_names_evidence_that_exists():
+    """Documentation completeness: a file or test named as evidence for a control marked in place must exist."""
+    import re
+    from pathlib import Path
+    app = Path(__file__).resolve().parents[1]
+    roots = [app, app.parent]
+    exts = (".py", ".md", ".json", ".csv", ".tsx", ".ts")
+    missing = []
+    for line in (app / "governance" / "control_matrix.md").read_text().splitlines():
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) < 6 or not cells[3].startswith("in place"):
+            continue
+        for tok in re.findall(r"`([^`]+)`", cells[4]):
+            path, _, test = tok.replace("()", "").partition("::")
+            if " " in path or path.startswith(("runs/", "/")) or not path.endswith(exts):
+                continue
+            found = [r / path for r in roots if list(r.glob(path))]
+            if not found:
+                missing.append(f"{cells[0]}: {path}")
+            elif test and not any(test in f.read_text() for f in found):
+                missing.append(f"{cells[0]}: {path}::{test}")
+    assert missing == []
+    for name in ("acceptance_criteria.md", "incident_procedure.md", "incident_log.md", "oversight_test_protocol.md", "intended_use.md", "roles.md"):
+        assert (app / "governance" / name).exists(), name
+
+
+def test_incident_report_lists_retractions_denied_actions_and_failed_sign_ins(tmp_path, monkeypatch):
+    from app.api import incidents
+    monkeypatch.setattr(reviews, "STORE", tmp_path / "reviews")
+    off = lambda status, note, by: reviews.set_review("asm1", REC, "AL-1", status, note, by, "officer", "u_top")
+    off("proposed", "ok", "R1")
+    off("confirmed", "agreed", "R2")
+    off("retracted", "field visit found no damage", "R2")
+    audit.log("denied", "ana", None, method="GET", path="/api/assessments/x/export.csv", needed="export")
+    for _ in range(2):
+        audit.log("login_failed", "kim", None, username="kim", reason="wrong username or password")
+    audit.log("model_approval", "adm", None, previous="a", model="b", reason="ablation result")
+    c = incidents.collect()
+    assert [r["reason"] for r in c["retractions"]] == ["field visit found no damage"] and len(c["denied"]) == 1
+    assert c["failed_by_user"] == {"kim": 2} and c["chain"]["ok"] and len(c["model_approvals"]) == 1
+    text = incidents.markdown(c)
+    assert "asm1 / AL-1: field visit found no damage" in text and "kim: 2" in text and "export.csv" in text
