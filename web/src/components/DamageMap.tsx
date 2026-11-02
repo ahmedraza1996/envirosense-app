@@ -1,3 +1,4 @@
+import AlignMenu from "./AlignMenu";
 import { useEffect, useMemo, useRef, useState } from "react";
 import L from "leaflet";
 import { ImageOverlay, MapContainer, useMap } from "react-leaflet";
@@ -23,7 +24,7 @@ interface Props {
   options: MapOptions; onOptions: (o: MapOptions) => void;
   selected: string | null; onSelect: (id: string | null) => void; focus: Focus; mode: Mode;
   scenes: Scene[]; onScene: (id: string) => void; message?: string;
-  reviews: Reviews | null; alertId: string | null; context: Context | null;
+  reviews: Reviews | null; alertId: string | null; context: Context | null; onAssessment: (a: Assessment) => void;
 }
 
 function Buildings({ features, options, selected, onSelect, toLatLng }: { features: Feature[]; options: MapOptions; selected: string | null; onSelect: (id: string) => void; toLatLng: ToLatLng }) {
@@ -133,7 +134,7 @@ function LayersMenu({ options, set, hasPixelMap, mode, geo, context }: { options
   );
 }
 
-export default function DamageMap({ assessment, loading, error, options, onOptions, selected, onSelect, focus, mode, scenes, onScene, message, reviews, alertId, context }: Props) {
+export default function DamageMap({ assessment, loading, error, options, onOptions, selected, onSelect, focus, mode, scenes, onScene, message, reviews, alertId, context, onAssessment }: Props) {
   const set = (patch: Partial<MapOptions>) => onOptions({ ...options, ...patch });
   const features = useMemo(() => assessment?.features ?? [], [assessment]);
   const w = assessment?.scene.width_px ?? 1024;
@@ -176,7 +177,10 @@ export default function DamageMap({ assessment, loading, error, options, onOptio
               <button aria-pressed={options.phase === "post"} onClick={() => set({ phase: "post" })}>After</button>
             </div>
           </div>
-          <LayersMenu options={options} set={set} hasPixelMap={assessment.has_damage_map} mode={mode} geo={view === "geo"} context={context} />
+          <div className="toolbar-group">
+            {view === "geo" && <AlignMenu assessment={assessment} onAssessment={onAssessment} />}
+            <LayersMenu options={options} set={set} hasPixelMap={assessment.has_damage_map} mode={mode} geo={view === "geo"} context={context} />
+          </div>
         </div>
       )}
 

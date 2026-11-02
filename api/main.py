@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTex
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import context, events, geoimage, report, reviews, service, uploads
+from . import context, events, geocal, geoimage, report, reviews, service, uploads
 from .scenes import catalogue, image_jpeg, scene
 
 app = FastAPI(title="EnviroSense damage assessment", version="0.1")
@@ -247,6 +247,48 @@ def get_context(aid: str, refresh: bool = False):
     rec = area_record_or_404(aid)
     res = context.for_assessment(aid, rec, refresh)
     return {k: v for k, v in res.items() if not k.startswith("_")}
+
+
+# ---- map offset ------------------------------------------------------------------------------------------------
+
+class GeoOffset(BaseModel):
+    east_m: float
+    north_m: float
+    method: str = "manual"
+    note: str | None = None
+
+
+@app.get("/api/assessments/{aid}/geo-offset")
+def get_geo_offset(aid: str):
+    return geocal.current(json.loads(stored(aid).read_text()))
+
+
+@app.put("/api/assessments/{aid}/geo-offset")
+def put_geo_offset(aid: str, body: GeoOffset):
+    """Move image, outlines and alerts of an assessment on the street map (east / north in metres from the file's own georeference)."""
+    path = stored(aid)
+    rec = json.loads(path.read_text())
+    if not rec["scene"].get("geotransform"):
+        raise HTTPException(400, "this assessment has no georeference to move")
+    try:
+        entry = geocal.set_offset(rec, body.east_m, body.north_m, body.method, body.note)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    path.write_text(json.dumps(rec))
+    context.invalidate(aid)
+    return entry
+
+
+@app.post("/api/assessments/{aid}/geo-offset/measure")
+def measure_geo_offset(aid: str):
+    """Suggest an offset from OpenStreetMap buildings. Slow (up to a minute or two: Overpass); changes nothing."""
+    rec = json.loads(stored(aid).read_text())
+    try:
+        return geocal.measure(rec, lambda phase: service.record_image(rec, phase))
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    except ConnectionError as e:
+        raise HTTPException(503, str(e))
 
 
 # ---- events ---------------------------------------------------------------------------------------------------

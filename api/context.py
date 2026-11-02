@@ -147,3 +147,10 @@ def for_assessment(aid: str, rec: dict, refresh: bool = False) -> dict:
         _jobs[aid] = {"available": None, "state": "loading"}
         threading.Thread(target=_run, args=(aid, rec, path), daemon=True).start()
         return _jobs[aid]
+
+
+def invalidate(aid: str) -> None:
+    """Forget the cached context of an assessment (its alerts moved on the map, so distances change)."""
+    with _lock:
+        _jobs.pop(aid, None)
+    (CACHE / "osm" / f"{aid}.json").unlink(missing_ok=True)

@@ -212,3 +212,11 @@ tr.dismissed td { color: var(--ink-3); text-decoration: line-through; }
 
 .layers-menu label.slider { display: grid; gap: 4px; color: var(--ink-2); cursor: default; }
 .layers-menu label.slider input { width: 100%; }
+
+.align-menu { width: 264px; gap: 8px; padding: 10px; }
+.align-menu p { margin: 0; }
+.align-pad { display: grid; grid-template-areas: ". n ." "w c e" ". s ."; grid-template-columns: repeat(3, 44px); justify-content: center; gap: 4px; align-items: center; justify-items: center; }
+.align-pad .button { width: 44px; padding: 4px 0; }
+.align-menu .segmented { justify-self: center; }
+.align-suggestion { display: grid; gap: 6px; padding: 8px; background: var(--sunken); border-radius: var(--radius); }
+.error-text { color: #B42318; }

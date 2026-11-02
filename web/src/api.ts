@@ -29,6 +29,12 @@ export interface Scene {
   before?: BeforeInfo; notes?: string[];
   geo_bounds?: [[number, number], [number, number]] | null;   // rotated geotransform: bounds of the north-up copies
   geo_fit_error_m?: number;
+  geo_offset_m?: GeoOffset | null;           // placement on the street map moved by hand or from OpenStreetMap
+}
+
+export interface GeoOffset { east: number; north: number; method: string | null; note?: string }
+export interface GeoSuggestion {
+  east_m: number; north_m: number; buildings: number; sharpness: number; before_after_disagree_m: number; clear: boolean; note: string;
 }
 
 export interface BeforeInfo {
@@ -151,6 +157,9 @@ export const api = {
     }).then(json<{ id: string }>);
     return fetch(`/api/assessments/${r.id}`).then(json<Assessment>);
   },
+  setGeoOffset: (aid: string, east_m: number, north_m: number, method: string, note?: string) =>
+    fetch(`/api/assessments/${aid}/geo-offset`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ east_m, north_m, method, note }) }).then(json<GeoOffset>),
+  measureGeoOffset: (aid: string) => fetch(`/api/assessments/${aid}/geo-offset/measure`, { method: "POST" }).then(json<GeoSuggestion>),
   assessment: (aid: string) => fetch(`/api/assessments/${aid}`).then(json<Assessment>),
   uploads: () => fetch("/api/uploads").then(json<Upload[]>),
   upload: (form: FormData) => fetch("/api/uploads", { method: "POST", body: form }).then(json<Upload>),

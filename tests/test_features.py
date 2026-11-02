@@ -216,3 +216,63 @@ def test_events_list_and_detail():
     assert len(d["tiles"]) == ev[0]["tiles"] and all("pair_id" in t for t in d["tiles"])
     assert c.get("/api/events/nowhere?model_id=unet_post").status_code == 404
     assert c.get("/api/events?model_id=clf_B").status_code == 400
+
+
+# ---- map offset ----------------------------------------------------------------------------------------------
+
+def _record():
+    gt = [-95.5, 4e-6, 0.0, 29.8, 0.0, -4e-6]
+    return {"scene": {"geotransform": gt, "centre_lat": 29.79, "centre_lon": -95.49, "pixel_size_m": 0.44},
+            "alerts": [{"centroid_lat": 29.79, "centroid_lon": -95.49, "hull_lonlat": [[-95.49, 29.79], [-95.48, 29.79]]}],
+            "below_threshold": [{"centroid_lat": 29.7, "centroid_lon": -95.4}],
+            "features": [{"properties": {"centroid_lnglat": [-95.49, 29.79]}}]}
+
+
+def test_geo_offset_moves_everything_and_reverts():
+    import copy, math
+    from app.api import geocal
+    rec = _record()
+    orig = copy.deepcopy(rec)
+    e = geocal.set_offset(rec, 11.0, 16.0, "manual")
+    assert e["east"] == 11.0 and rec["scene"]["geo_offset_m"]["north"] == 16.0
+    dlat = rec["alerts"][0]["centroid_lat"] - 29.79
+    dlon = rec["alerts"][0]["centroid_lon"] + 95.49
+    assert abs(dlat * geocal.M_PER_DEG - 16.0) < 0.01
+    assert abs(dlon * geocal.M_PER_DEG * math.cos(math.radians(29.79)) - 11.0) < 0.01
+    # every placement field moved by the same amount: geotransform origin, hull, feature centroid, other alerts
+    assert abs((rec["scene"]["geotransform"][3] - 29.8) - dlat) < 1e-12 and abs((rec["scene"]["geotransform"][0] + 95.5) - dlon) < 1e-9
+    assert abs(rec["alerts"][0]["hull_lonlat"][1][1] - 29.79 - dlat) < 1e-12
+    assert abs(rec["features"][0]["properties"]["centroid_lnglat"][0] + 95.49 - dlon) < 1e-9
+    assert rec["scene"]["geotransform"][1] == 4e-6                  # pixel size untouched
+    # absolute, not cumulative: asking for the same offset again changes nothing; zero restores the file position
+    again = copy.deepcopy(rec)
+    geocal.set_offset(again, 11.0, 16.0, "manual")
+    assert again["alerts"] == rec["alerts"]
+    geocal.set_offset(rec, 0.0, 0.0, "manual")
+    assert rec["scene"]["geo_offset_m"]["method"] is None
+    assert abs(rec["scene"]["geotransform"][3] - orig["scene"]["geotransform"][3]) < 1e-8
+    assert abs(rec["alerts"][0]["centroid_lon"] - orig["alerts"][0]["centroid_lon"]) < 1e-8
+
+
+def test_geo_offset_limit_and_measure_recovers_shift(monkeypatch):
+    import cv2
+    from app.api import geocal
+    with pytest.raises(ValueError):
+        geocal.set_offset(_record(), 500.0, 0.0, "manual")
+    # a synthetic scene: bright "roofs" on dark ground; OpenStreetMap outlines drawn 12 px east and 8 px north of them
+    rng = np.random.default_rng(3)
+    img = np.full((1024, 1024, 3), 40, np.uint8)
+    boxes = []
+    for _ in range(40):
+        x, y = rng.integers(40, 940, 2); w, h = rng.integers(25, 60, 2)
+        cv2.rectangle(img, (int(x), int(y)), (int(x + w), int(y + h)), (200, 190, 180), -1)
+        boxes.append((x, y, w, h))
+    rec = _record()
+    gt = rec["scene"]["geotransform"]
+    geo = lambda px, py: {"lon": gt[0] + (px + 0.5 + 12) * gt[1], "lat": gt[3] + (py + 0.5 - 8) * gt[5]}
+    ways = [[geo(x, y), geo(x + w, y), geo(x + w, y + h), geo(x, y + h)] for x, y, w, h in boxes]
+    monkeypatch.setattr(geocal, "_osm_buildings", lambda *a: ways)
+    s = geocal.measure(rec, lambda phase: img)
+    # the outlines lie east and north of the roofs, so the image has to move 12 px east and 8 px north to meet them
+    assert abs(s["east_m"] - 12 * 0.44) < 0.6 and abs(s["north_m"] - 8 * 0.44) < 0.6
+    assert s["clear"]

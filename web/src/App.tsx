@@ -41,6 +41,7 @@ export default function App() {
   const [alertId, setAlertId] = useState<string | null>(null);
   const [reviews, setReviews] = useState<Reviews | null>(null);
   const [context, setContext] = useState<Context | null>(null);
+  const [contextTick, setContextTick] = useState(0);
   const [events, setEvents] = useState<EventSummary[]>([]);
   const [eventName, setEventName] = useState<string | null>(null);
 
@@ -135,7 +136,7 @@ export default function App() {
     }).catch(() => undefined);
     void poll();
     return () => { cancelled = true; clearTimeout(timer); };
-  }, [aid]);
+  }, [aid, contextTick]);
 
   const review = async (id: string, status: ReviewStatus, note: string) => {
     if (!aid) return;
@@ -235,7 +236,7 @@ export default function App() {
             <DamageMap
               assessment={assessment} loading={loading} error={error} options={opts} onOptions={setOpts} message={uploadMessage}
               selected={selected} onSelect={setSelected} focus={focus} mode={mode} scenes={scenes}
-              onScene={(id) => { switchSource("xbd"); setSceneId(id); }} reviews={reviews} alertId={alertId} context={context}
+              onScene={(id) => { switchSource("xbd"); setSceneId(id); }} reviews={reviews} alertId={alertId} context={context} onAssessment={(a) => { setAssessment(a); setContext(null); setContextTick((t) => t + 1); }}
             />
             <aside className="detail">
               {building && assessment ? (

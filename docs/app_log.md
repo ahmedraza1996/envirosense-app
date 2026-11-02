@@ -156,3 +156,12 @@ alert area drawn, overview dots for the other Santa Rosa tiles.
 
 **Other:** E15 (misalignment-trained Siamese U-Net) appears in the model list when its training run has finished; loading state no longer sticks when switching between tiles, uploads and events; stress scenarios `09_misregistered-before` and `10_utm-rotated-grid` (`scripts/make_stress_set.py`).
 **Tests:** `tests/test_features.py` (outline convention, north-up placement, registration, review and export, report, upload edit/delete, streaming inference, events) plus the earlier suite.
+
+## A10 Map offset (Align)
+
+xBD tiles carry an approximate geotransform. On Hurricane Harvey tile 5 the OpenStreetMap building outlines sat about 20 m from the roofs in the image (a 40 px window of edge matching gave 11 m east / 16 m north, the app's own measurement 14 m east / 23 m north; the two disagree by about 5 m, so a measured offset is good to a few metres, not better). The model's outlines always fit the image, so the fix moves image, outlines and alerts together on the street map.
+
+- `api/geocal.py`: `set_offset` translates every longitude/latitude field of a stored record (absolute, reversible, kept in `scene.geo_offset_m`); `measure` draws OpenStreetMap buildings into the image grid and finds the shift onto the strongest image edges (same method as `snap`), with a sharpness score and the before/after disagreement as confidence.
+- Endpoints: `GET/PUT /api/assessments/{aid}/geo-offset`, `POST .../geo-offset/measure` (slow: Overpass).
+- Map view: **Align** menu (arrows with 1, 5 or 20 m steps, Measure from OpenStreetMap, Apply, Reset).
+- Not automatic: the offset differs per image, so a measured suggestion needs a look by eye; the Events view still places tile frames with the file's own georeference.
