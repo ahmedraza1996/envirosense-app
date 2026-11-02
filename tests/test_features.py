@@ -82,6 +82,14 @@ def test_sift_registration_recovers_rotation_zoom_shift(deg, scale, dx, dy):
     assert valid2.mean() > 0.8
 
 
+def test_large_images_are_matched_in_full_resolution_windows():
+    assert registration._windows(1024, 1024) == [(0, 0, 1024, 1024)]
+    assert registration._windows(1500, 1500) == [(0, 0, 1500, 1500)]            # not much above the matching size: one reduced window
+    wins = registration._windows(2048, 3072)
+    assert len(wins) == 4 and all(h == w == registration.MAX_SIDE for _, _, h, w in wins)
+    assert {(y, x) for y, x, _, _ in wins} == {(0, 0), (0, 1792), (768, 0), (768, 1792)}      # the corners: matches spread over the image
+
+
 def test_registration_rejects_unrelated_images():
     reg = registration.register(textured(seed=1), textured(seed=2), None, methods=("sift",))
     assert not reg.ok
