@@ -14,14 +14,14 @@ OECD AI Principles; OCHA Data Responsibility Guidelines. Work packages (WP) are 
 | D2 | Data | Data audit: counts, classes, events, geometry, georeference conflict | in place | `reports/audit_xbd.md` | MEASURE; Art. 10 |
 | D3 | Data | Datasheet (composition, collection, use, limits) | draft | `governance/datasheet_xbd.md` | MAP; Art. 10, 11 |
 | D4 | Data | Licence and terms of use recorded | planned (WP-G1) | datasheet section 6 | Art. 10; OCHA |
-| D5 | Data | Uploads: deletion on request removes images, results and reviews; retention setting and notice | partial (deletion exists) | `api/uploads.py` delete; test in `tests/test_features.py` | OCHA data responsibility; OECD |
+| D5 | Data | Uploads: deletion on request removes images, results and reviews; retention setting and notice | in place (deletion, optional retention rule, notice in the upload dialog) | `api/uploads.py` delete; test in `tests/test_features.py` | OCHA data responsibility; OECD |
 | T1 | Training | Frozen splits; run folder with configuration, log, checkpoint, results | in place | `configs/pair_splits.csv`, `runs/*`, `reports/experiments_table.md` | MEASURE, MANAGE; Art. 11, 12 |
 | T2 | Training | Model cards | draft (E14, E15) | `governance/model_card_*.md` | MAP, MEASURE; Art. 11 |
 | T3 | Training | Seeds and intervals for headline results | planned (WP-M3) | experiment log | MEASURE; Art. 15 |
 | V1 | Validation | Acceptance criteria written before the final test run | planned | `governance/acceptance_criteria.md` (to be written, dated) | MEASURE; Art. 15 |
 | V2 | Validation | Event-grouped evaluation, per-event reporting | partial (crop classifiers only) | E05; WP-M4 | MEASURE; Art. 15 |
 | V3 | Validation | Robustness tests (shift, rotation, zoom) | in place | E14b, E15 robustness, E15c | MEASURE; Art. 15 |
-| V4 | Validation | Calibration, ECE, coverage-risk curve | planned (WP-M5) | `src/metrics.py` has `ece` | MEASURE; Art. 15 |
+| V4 | Validation | Calibration, ECE, coverage-risk curve | in place (measured for E14 and E15; temperature not applied because the heads are already calibrated) | `src/calibrate.py`, `runs/<run>/calibration.json`, experiment E17 | MEASURE; Art. 15 |
 | P1 | Prediction | Provenance record per assessment (model, checkpoint, code version, registration, thresholds) | in place | assessment JSON: `model`, `provenance` | MANAGE; Art. 12 |
 | P2 | Prediction | Provenance adds image and checkpoint hashes, offset and thresholds | in place (assessments made from 2 Nov 2026; older records lack hashes) | `api/provenance.py`; `tests/test_governance.py` | Art. 12 |
 | P3 | Prediction | Input gates (failed registration, low coverage, unmeasured offset, low confidence) with visible flags | partial (flags shown; abstention planned, WP-M5) | `api/gates.py`; `tests/test_governance.py` | MEASURE, MANAGE; Art. 15 |
@@ -41,4 +41,4 @@ OECD AI Principles; OCHA Data Responsibility Guidelines. Work packages (WP) are 
 | X1 | Audit | Append-only audit log with hash chain | in place | `api/audit.py`, `GET /api/audit/verify`; `tests/test_governance.py` | Art. 12; auditability |
 | X2 | Assurance | Traceability test, documentation completeness, gate tests, accountability metrics | planned (WP-G3) | `tests/test_governance.py`; assurance report | SMACTR testing; MEASURE |
 
-Count (2 Nov 2026): 34 controls; in place 16 (G1 to G3 are drafts awaiting supervisor review), draft 2, partial 7, planned 9.
+Count (2 Nov 2026): 34 controls; in place 18 (G1 to G3 are drafts awaiting supervisor review), draft 2, partial 6, planned 8.
