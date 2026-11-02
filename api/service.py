@@ -12,7 +12,7 @@ import numpy as np
 
 from . import zones
 from .engines import LABEL_IDS, REVIEW_CONFIDENCE, ROOT, XBD, class_name, discover_models, load_engine
-from .scenes import CACHE, pixel_size_m, scene
+from .scenes import CACHE, pixel_size_m, scene  # noqa: F401  (CACHE is also used by main)
 
 STORE = ROOT / "runs" / "app" / "assessments"
 COLOURS = {1: (63, 143, 95), 2: (217, 165, 32), 3: (217, 98, 43), 4: (179, 38, 30)}  # UI damage ramp, RGB

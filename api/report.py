@@ -3,6 +3,7 @@
 Every number comes from the stored assessment record (no free text is generated, no LLM). The report is marked
 DRAFT: the plan requires analyst review before anything is shared externally.
 """
+import hashlib
 import html
 import json
 from datetime import datetime, timezone
@@ -10,8 +11,9 @@ from datetime import datetime, timezone
 import cv2
 import numpy as np
 
+from . import reviews
 from .engines import XBD
-from .service import STORE
+from .service import CACHE, STORE
 
 NAMES = ["destroyed", "major-damage", "minor-damage", "no-damage"]
 LABEL = {"destroyed": "Destroyed", "major-damage": "Major damage", "minor-damage": "Minor damage",
@@ -86,19 +88,37 @@ def fmt_area(m2: float) -> str:
     return f"{m2 / 10000:.1f} ha" if m2 >= 10000 else f"{m2:,.0f} m²"
 
 
+def visible_alerts(aid: str, a: dict) -> list:
+    """(number, alert, review entry) for the alerts an analyst has not dismissed; numbers are the app's, so the report,
+    the map figure and the app agree."""
+    r = reviews.load(aid)
+    return [(i, x, reviews.entry(r, x["alert_id"])) for i, x in enumerate(a.get("alerts", []), 1)
+            if reviews.entry(r, x["alert_id"])["status"] != "dismissed"]
+
+
+def osm_context(aid: str) -> dict:
+    p = CACHE / "osm" / f"{aid}.json"
+    return json.loads(p.read_text()) if p.exists() else {}
+
+
 def area_markdown(aid: str, f: dict) -> str:
     """Footprint-free report: one entry per area alert; no building inventory involved."""
     a, sc, p = f["a"], f["sc"], f["pred"]
-    m, alerts, b = a["model"], a.get("alerts", []), a.get("benchmark") or {}
+    m, b = a["model"], a.get("benchmark") or {}
+    shown = visible_alerts(aid, a)
+    alerts = [x for _, x, _ in shown]
+    dismissed = len(a.get("alerts", [])) - len(shown)
+    ctx = osm_context(aid).get("alerts", {})
+    rev = reviews.counts(a, reviews.load(aid))
     high = sum(x["severity"] == "high" for x in alerts)
     if alerts:
         x = alerts[0]
         lead = (f"{len(alerts)} area alert{'s' if len(alerts) != 1 else ''} ({high} high, {len(alerts) - high} medium). "
-                f"Alert 1 ({x['severity']}) around {latlon(x['centroid_lat'], x['centroid_lon'])}: "
+                f"Alert {shown[0][0]} ({x['severity']}) around {latlon(x['centroid_lat'], x['centroid_lon'])}: "
                 f"{fmt_area(x['severe_area_m2'])} of severely damaged roof, {x['severe_share']:.0%} of the building area "
                 f"there, over an extent of {fmt_area(x['area_m2'])}.")
     else:
-        lead = "No area meets the alert rule on this tile."
+        lead = "No area meets the alert rule on this tile." if not dismissed else "All area alerts were dismissed by the analyst."
     sev = p["destroyed"] + p["major-damage"]
     upload = sc.get("source") == "upload"
     heading = sc["name"] if upload else f"{title(sc['disaster'])}, tile {a['pair_id'].split('_')[-1]}"
@@ -115,13 +135,34 @@ def area_markdown(aid: str, f: dict) -> str:
          "## Area alerts", ""]
     if alerts:
         L += [f"Rule: {a.get('alert_rule', '')}.", "",
-              "| # | Alert | Severity | Centre | Severe roof | Share | Extent | Structures |",
-              "|---:|---|---|---|---:|---:|---:|---:|"]
-        for i, x in enumerate(alerts, 1):
-            L.append(f"| {i} | {x['alert_id']} | {x['severity'].capitalize()} | {latlon(x['centroid_lat'], x['centroid_lon'])} | "
+              "| # | Alert | Severity | Review | Centre | Severe roof | Share | Extent | Structures |",
+              "|---:|---|---|---|---|---:|---:|---:|---:|"]
+        status = {"pending": "Draft", "confirmed": "Confirmed", "needs_info": "More information needed"}
+        for i, x, r in shown:
+            L.append(f"| {i} | {x['alert_id']} | {x['severity'].capitalize()} | {status[r['status']]} | "
+                     f"{latlon(x['centroid_lat'], x['centroid_lon'])} | "
                      f"{fmt_area(x['severe_area_m2'])} | {x['severe_share']:.0%} | {fmt_area(x['area_m2'])} | {x['structures']} |")
+        notes = [(i, r["note"]) for i, _, r in shown if r["note"]]
+        if notes:
+            L += ["", "Analyst notes:"] + [f"- Alert {i}: {n}" for i, n in notes]
+        context = [(i, ctx[x["alert_id"]]) for i, x, _ in shown if ctx.get(x["alert_id"])]
+        if context:
+            L += ["", "Context from OpenStreetMap (facilities within or near each area):"]
+            for i, c in context:
+                bits = list(c["flags"])
+                if c["nearest_hospital"]:
+                    h = c["nearest_hospital"]
+                    bits.append(f"nearest hospital {h['name'] or 'unnamed'}, {h['distance_m'] / 1000:.1f} km")
+                if c["nearest_main_road"]:
+                    bits.append(f"nearest main road {c['nearest_main_road']['distance_m']} m")
+                near = ", ".join(f"{n} {k.lower()}{'s' if n != 1 else ''}" for k, n in c["within_1km"].items() if n)
+                if near:
+                    bits.append(f"within 1 km: {near}")
+                L.append(f"- Alert {i}: " + ("; ".join(bits) if bits else "no listed facilities nearby"))
+        L += ["", f"Review status: {rev['confirmed']} confirmed, {rev['needs_info']} need more information, "
+                  f"{rev['pending']} still draft" + (f", {dismissed} dismissed and left out" if dismissed else "") + "."]
     else:
-        L.append("None.")
+        L.append("None." if not dismissed else f"None remain; {dismissed} dismissed by the analyst.")
     if a.get("below_threshold"):
         L += ["", f"{len(a['below_threshold'])} smaller patches of severe damage are below the alert threshold and are not alerted."]
     L += ["", "## Detected structures", "", "| Class | Structures |", "|---|---:|"]
@@ -138,7 +179,9 @@ def area_markdown(aid: str, f: dict) -> str:
           "image); a before image fixes this." if "post-only" in m["mode"] or "after only" in m["mode"] else
           "- Buildings are located with the before image, damage is read from the after image."),
           "- Damage classes describe what is visible from above; they are not field-verified structural assessments.",
-          "- The report has no information on road access, casualties or population."]
+          ("- Facility and road context is from OpenStreetMap and may be incomplete; the report has no information on "
+           "casualties or population." if ctx else
+           "- The report has no information on road access, casualties or population.")]
     if b:
         L.append(f"- Benchmark check (xBD tile, not used for the alerts): {b['xbd_found']} of {b['xbd_buildings']} xBD "
                  f"buildings found ({b['recall']:.0%}); {b['precision']:.0%} of detections are on buildings.")
@@ -161,7 +204,13 @@ def upload_lines(a: dict, sc: dict) -> list:
          f"- After image: event date {sc['post_date']}",
          f"- Before image: {src}; covers {b.get('coverage', 0):.0%} of the area"]
     if b.get("shift_m") is not None:
+        extra = []
+        if abs(b.get("rotation_deg") or 0) >= 0.15:
+            extra.append(f"rotation {b['rotation_deg']:+.2f}°")
+        if abs((b.get("scale") or 1) - 1) >= 0.002:
+            extra.append(f"zoom {100 * (b['scale'] - 1):+.1f}%")
         L.append(f"- Alignment: before/after offset measured at {b['shift_m']:.1f} m"
+                 + (f", {', '.join(extra)}" if extra else "") + (f" ({b['method']})" if b.get("method") else "")
                  + (", corrected" if b.get("corrected") else ", within tolerance" if b["shift_m"] < 1 else ", not corrected"))
     L += [f"- Note: {n}" for n in sc.get("notes", [])]
     return L
@@ -231,24 +280,26 @@ def markdown(aid: str) -> str:
 
 
 def map_png(aid: str) -> bytes:
-    """After image with predicted damage outlines and numbered priority areas (cached)."""
-    out = STORE / f"{aid}_report_map.png"
+    """After image with predicted damage outlines and numbered alert areas (cached per review state)."""
+    a = load(aid)
+    digest = hashlib.sha1(json.dumps(reviews.load(aid), sort_keys=True).encode()).hexdigest()[:8]
+    out = STORE / f"{aid}_report_map_{digest}.png"
     if out.exists():
         return out.read_bytes()
-    a = load(aid)
     from .service import record_image
     img = cv2.cvtColor(record_image(a, "post"), cv2.COLOR_RGB2BGR)
     overlay = img.copy()
     for feat in a["features"]:
         g = feat["geometry"]
         rings = g["coordinates"] if g["type"] == "Polygon" else [r[0] for r in g["coordinates"]]
-        pts = [np.round(np.array(r)).astype(np.int32) for r in rings]
-        cv2.fillPoly(overlay, pts, BGR[feat["properties"]["predicted_class"]])
+        half = 0.5 if a.get("kind") == "area" else 0.0     # area outlines use pixel edges, cv2 pixel centres
+        pts = [np.round((np.array(r) - half) * 16).astype(np.int32) for r in rings]      # 4 fractional bits
+        cv2.fillPoly(overlay, pts, BGR[feat["properties"]["predicted_class"]], shift=4)
     img = cv2.addWeighted(overlay, 0.45, img, 0.55, 0)
-    areas = a.get("alerts", []) if a.get("kind") == "area" else a["zones"][:5]
-    for i, z in enumerate(areas, 1):
-        hull = np.round(np.array(z["hull_px"])).astype(np.int32)
-        cv2.polylines(img, [hull], True, (25, 27, 28), 2, cv2.LINE_AA)
+    areas = [(i, x) for i, x, _ in visible_alerts(aid, a)] if a.get("kind") == "area" else list(enumerate(a["zones"][:5], 1))
+    for i, z in areas:
+        hull = np.round((np.array(z["hull_px"]) - (0.5 if a.get("kind") == "area" else 0.0)) * 16).astype(np.int32)
+        cv2.polylines(img, [hull], True, (25, 27, 28), 2, cv2.LINE_AA, shift=4)
         cx, cy = map(int, z["centroid_px"])
         cv2.circle(img, (cx, cy), 15, (25, 27, 28), -1, cv2.LINE_AA)
         cv2.putText(img, str(i), (cx - 6 if i < 10 else cx - 11, cy + 6), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2, cv2.LINE_AA)

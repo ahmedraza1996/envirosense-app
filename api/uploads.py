@@ -25,18 +25,21 @@ import cv2
 import numpy as np
 from rasterio.transform import Affine
 
-from . import imagery, service
+from . import geoimage, imagery, registration, service
 from .archive import xbd_archive
 from .engines import ROOT
 
 UPLOADS = ROOT / "runs" / "app" / "uploads"
+REVIEWS = ROOT / "runs" / "app" / "reviews"
 EXTENSIONS = (".tif", ".tiff", ".png", ".jpg", ".jpeg")
 MAX_BYTES = 300 * 2 ** 20
-MAX_SIDE = 4096              # px after resampling (about 2 km at 0.5 m): bounds CPU time and memory
+MAX_SIDE = 8192              # px after resampling (about 4 km at 0.5 m): bounds CPU time and memory; larger images are processed in blocks
+BLOCKS_ABOVE = 2048          # images with a side above this are processed block by block (streaming)
 TARGET_M = 0.5               # metres per pixel used when an image is far from the training resolution
 KEEP_M = (0.25, 0.9)         # xBD tiles are roughly 0.3-0.6 m per pixel; inside this range the image is used as is
 COARSE_M = 1.2               # beyond this, damage classes are unreliable (noted on the record)
 SHIFT_MIN_PX, SHIFT_MAX_PX, MIN_RESPONSE = 1.5, 48, 0.05   # response: phase-correlation peak
+ROT_MIN_DEG, SCALE_MIN = 0.15, 0.002                        # smaller rotation / zoom than this is left alone
 DISASTER_TYPES = ("earthquake", "fire", "flooding", "wind", "tsunami", "volcano", "other")
 
 _queue: "queue.Queue[str]" = queue.Queue()
@@ -98,6 +101,45 @@ def create(after: Path, meta: dict, before: Path | None = None) -> str:
     _queue.put(uid)
     _ensure_worker()
     return uid
+
+
+def delete(uid: str) -> None:
+    """Remove an upload with everything derived from it: inputs, images, stored assessments, crops, caches, reviews."""
+    import shutil
+    d = folder(uid)
+    if not (d / "meta.json").exists():
+        raise KeyError(uid)
+    if uid in _active:
+        raise imagery.ImageryError("this upload is still being processed; wait for it to finish")
+    shutil.rmtree(d)
+    for root in (service.STORE, service.CACHE / "crops", service.CACHE / "geo", service.CACHE / "osm", REVIEWS):
+        for f in root.glob(f"{uid}*"):
+            f.unlink(missing_ok=True)
+
+
+def update(uid: str, name: str | None = None, disaster_type: str | None = None, event_date: str | None = None) -> dict:
+    """Rename an upload or correct its type / event date; the stored assessment carries the same details."""
+    d = folder(uid)
+    meta = read_json(d / "meta.json")
+    if meta is None:
+        raise KeyError(uid)
+    if name is not None:
+        meta["name"] = name.strip()[:80] or meta["name"]
+    if disaster_type is not None:
+        if disaster_type not in DISASTER_TYPES:
+            raise imagery.ImageryError(f"disaster_type must be one of {', '.join(DISASTER_TYPES)}")
+        meta["disaster_type"] = disaster_type
+    if event_date is not None:
+        if event_date and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", event_date):
+            raise imagery.ImageryError("event_date must be YYYY-MM-DD")
+        meta["event_date"] = event_date or None
+    (d / "meta.json").write_text(json.dumps(meta))
+    for f in service.STORE.glob(f"{uid}__*__area.json"):
+        rec = json.loads(f.read_text())
+        rec["scene"].update(name=meta["name"], disaster=meta["name"], disaster_type=meta["disaster_type"],
+                            event_date=meta["event_date"], post_date=meta["event_date"] or "not given")
+        f.write_text(json.dumps(rec))
+    return info(uid)
 
 
 def new_folder() -> tuple[str, Path]:
@@ -173,7 +215,7 @@ def process(uid: str) -> dict:
         notes.append(f"After image is coarser ({px:.1f} m per pixel) than the training imagery; damage classes are less reliable.")
     if max(after.shape) > MAX_SIDE:
         raise imagery.ImageryError(f"image covers {after.shape[1]} x {after.shape[0]} px at {imagery.pixel_size_m(after):.2f} m; "
-                                   f"crop it to at most {MAX_SIDE} px per side (about {MAX_SIDE * TARGET_M / 1000:.0f} km)")
+                                   f"crop it to at most {MAX_SIDE} px per side (about {MAX_SIDE * TARGET_M / 1000:.0f} km at {TARGET_M} m per pixel)")
     post = after.rgb
     post_valid = post.max(-1) > 0
 
@@ -188,25 +230,55 @@ def process(uid: str) -> dict:
 
     set_status(uid, step="Aligning before and after")
     qa = {"coverage": float(valid.sum() / max(post_valid.sum(), 1)), "shift_px": None, "shift_m": None,
-          "response": None, "corrected": False}
+          "response": None, "corrected": False, "method": None, "rotation_deg": 0.0, "scale": 1.0,
+          "matches": None, "inliers": None}
     if qa["coverage"] > 0.25:
+        pxm = imagery.pixel_size_m(after)
+        total = np.zeros(2)                                  # translation of pre relative to post, pixels (shift convention)
+        reg = registration.register(pre, post, valid)
+        if reg.ok:
+            qa.update(method=reg.method, matches=reg.matches, inliers=reg.inliers, rotation_deg=round(reg.rotation_deg, 3),
+                      scale=round(reg.scale, 4), rms_px=round(reg.rms_px, 2))
+            significant = abs(reg.rotation_deg) >= ROT_MIN_DEG or abs(reg.scale - 1) >= SCALE_MIN or reg.shift_px >= SHIFT_MIN_PX
+            m = np.float32(reg.matrix)
+            if significant and reg.shift_px <= SHIFT_MAX_PX * 4:
+                h_, w_ = valid.shape
+                v = m[:, :2] @ np.array([w_ / 2, h_ / 2]) + m[:, 2] - np.array([w_ / 2, h_ / 2])
+                pre, valid = registration.apply(reg, pre, valid)
+                valid &= post_valid
+                total = -v
+                qa["corrected"] = True
+                bits = []
+                if abs(reg.rotation_deg) >= ROT_MIN_DEG:
+                    bits.append(f"rotated by {reg.rotation_deg:+.2f} degrees")
+                if abs(reg.scale - 1) >= SCALE_MIN:
+                    bits.append(f"zoom {100 * (reg.scale - 1):+.1f}%")
+                if reg.shift_px >= SHIFT_MIN_PX:
+                    bits.append(f"shifted by {reg.shift_px * pxm:.1f} m")
+                notes.append(f"The before image was registered to the after image from {reg.inliers} matching features "
+                             f"({reg.method}): {', '.join(bits)}.")
+        else:
+            qa["method"] = "phase correlation"
+            notes.append(f"Rotation and zoom could not be measured ({reg.reason}); only a shift was looked for.")
         est = imagery.estimate_shift(pre, post, valid)
         if est and est[2] < MIN_RESPONSE:
             qa["response"] = round(est[2], 3)
-            notes.append("The before and after images differ too much to measure an offset; their georeferencing is used as given.")
+            if not qa["corrected"]:
+                notes.append("The before and after images differ too much to measure an offset; their georeferencing is used as given.")
         elif est:
             dx, dy, resp = est
             mag = math.hypot(dx, dy)
-            qa.update(shift_px=[round(dx, 2), round(dy, 2)], shift_m=round(mag * imagery.pixel_size_m(after), 2),
-                      response=round(resp, 3))
+            qa["response"] = round(resp, 3)
             if SHIFT_MIN_PX <= mag <= SHIFT_MAX_PX:
                 pre, valid = imagery.shift_image(pre, valid, dx, dy)
                 valid &= post_valid
+                total = total + (dx, dy)
                 qa["corrected"] = True
-                qa["coverage"] = float(valid.sum() / max(post_valid.sum(), 1))
             elif mag > SHIFT_MAX_PX:
-                notes.append(f"Before and after images appear offset by {qa['shift_m']} m; the offset was not corrected, "
+                notes.append(f"Before and after images appear offset by {mag * pxm:.1f} m; the offset was not corrected, "
                              "check the georeferencing.")
+        qa.update(shift_px=[round(float(total[0]), 2), round(float(total[1]), 2)], shift_m=round(float(np.hypot(*total)) * pxm, 2))
+        qa["coverage"] = float(valid.sum() / max(post_valid.sum(), 1))
     pre[~valid] = 0
     cv2.imwrite(str(d / "post.jpg"), cv2.cvtColor(post, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 88])
     cv2.imwrite(str(d / "pre.jpg"), cv2.cvtColor(pre, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 88])
@@ -216,26 +288,41 @@ def process(uid: str) -> dict:
     models = service.models()
     eng = service.engine(model_id)
     post_id = "unet_post" if "unet_post" in models else None
+    big = max(post.shape[:2]) > BLOCKS_ABOVE
+
+    def progress(k, n):
+        set_status(uid, step=f"Detecting buildings and damage (block {k} of {n})")
+
+    def predict(engine, a_img, b_img, valid_=None, fallback=None):
+        if big:
+            return engine.predict_stream(a_img, b_img, valid_, fallback, progress=progress)
+        return engine.predict_large(a_img, b_img)
+
     if eng.uses_pre and qa["coverage"] > 0:
-        loc_p, dmg_p = eng.predict_large(pre, post)
-        if qa["coverage"] < 0.999:
-            if not post_id:
-                raise imagery.ImageryError("the before image does not cover the whole area and no post-only model is available")
-            lp, dp = service.engine(post_id).predict_large(post, post)
-            loc_p = np.where(valid, loc_p, lp)
-            dmg_p[:, ~valid] = dp[:, ~valid]
-            mode = f"before + after on {qa['coverage']:.1%} of the area, after only elsewhere"
+        partial = qa["coverage"] < 0.999
+        if partial and not post_id:
+            raise imagery.ImageryError("the before image does not cover the whole area and no post-only model is available")
+        if big:
+            loc_p, dmg_p = predict(eng, pre, post, valid, service.engine(post_id) if partial else None)
         else:
-            mode = eng.mode
+            loc_p, dmg_p = eng.predict_large(pre, post)
+            if partial:
+                lp, dp = service.engine(post_id).predict_large(post, post)
+                loc_p = np.where(valid, loc_p, lp)
+                dmg_p[:, ~valid] = dp[:, ~valid]
+        mode = f"before + after on {qa['coverage']:.1%} of the area, after only elsewhere" if partial else eng.mode
     else:
         if eng.uses_pre:
             if not post_id:
                 raise imagery.ImageryError("no before image covers this area and no post-only model is available")
             notes.append("No before image covers this area; the after image was assessed on its own.")
             eng = service.engine(post_id)
-        loc_p, dmg_p = eng.predict_large(post, post)
+        loc_p, dmg_p = predict(eng, post, post)
         mode = eng.mode
-    loc = (loc_p > 0.5) & post_valid
+    if big:      # uint8 probabilities (x255)
+        loc = (loc_p >= 128) & post_valid
+    else:
+        loc = (loc_p > 0.5) & post_valid
     dmg = (dmg_p.argmax(0) + 1).astype(np.uint8) * loc
 
     set_status(uid, step="Raising area alerts")
@@ -243,11 +330,16 @@ def process(uid: str) -> dict:
     h, w = after.shape
     lon, lat = to_lonlat(w / 2, h / 2)
     dates = sorted({t["capture_date"] for t in source.get("tiles", []) if t["capture_date"]})
+    gt = imagery.approx_geotransform(after)
+    fit_err = imagery.geotransform_error_m(after)
+    if fit_err > 0.5:
+        notes.append(f"Outlines are placed with a linear fit of the image's projection; it can be off by up to {fit_err:.1f} m.")
     scene_info = {"pair_id": uid, "source": "upload", "split": "upload", "name": meta["name"],
                   "disaster": meta["name"], "disaster_type": meta["disaster_type"],
                   "event_date": meta.get("event_date"), "centre_lat": lat, "centre_lon": lon,
                   "pixel_size_m": imagery.pixel_size_m(after), "size_px": max(h, w), "width_px": w, "height_px": h,
-                  "geotransform": imagery.approx_geotransform(after),
+                  "geotransform": gt, "geo_fit_error_m": round(fit_err, 3),
+                  "geo_bounds": geoimage.bounds(gt, w, h, imagery.pixel_size_m(after)) if geoimage.is_rotated(gt) else None,
                   "pre_date": ", ".join(dates) if dates else ("uploaded" if source["kind"] == "upload" else "none found"),
                   "post_date": meta.get("event_date") or "not given",
                   "before": {**source, **qa}, "notes": notes}

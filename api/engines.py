@@ -146,6 +146,63 @@ class UNetEngine:
                     hits[y:y + wy, x:x + wx] += 1
         return loc_p[:h, :w] / hits[:h, :w], dmg_p[:, :h, :w] / hits[:h, :w]
 
+    @torch.no_grad()
+    def predict_stream(self, pre_rgb, post_rgb, valid=None, fallback=None, win=1024, overlap=128, progress=None):
+        """predict_large for images of any size: windows are processed in horizontal bands and each finished band is
+        stored as uint8 (probability x 255), so memory stays at a few hundred MB for a 8000 px image. The average over
+        overlapping windows is the same as predict_large's. `valid` (before-image coverage) with a post-only `fallback`
+        engine: windows with no coverage use the fallback, partly covered windows use both and take the fallback's
+        output where the before image is missing. Returns building probability (H x W) and damage probabilities
+        (4 x H x W), both uint8."""
+        from seg_benchmark import MEAN, STD
+        h, w = post_rgb.shape[:2]
+        wy, wx = min(win, -(-h // 32) * 32), min(win, -(-w // 32) * 32)
+        starts = lambda n, k: [0] if n <= k else sorted(set(range(0, n - k, k - overlap)) | {n - k})
+        ys, xs = starts(h, wy), starts(w, wx)
+        norm = lambda a: torch.from_numpy(((np.pad(a, ((0, wy - a.shape[0]), (0, wx - a.shape[1]), (0, 0))).astype(np.float32)
+                                           - MEAN) / STD).transpose(2, 0, 1).copy())[None]
+        out_loc, out_dmg = np.zeros((h, w), np.uint8), np.zeros((4, h, w), np.uint8)
+        acc_loc, acc_dmg, hits = (np.zeros((wy, w), np.float32), np.zeros((4, wy, w), np.float32), np.zeros((wy, w), np.float32))
+        done, total = 0, len(ys) * len(xs)
+
+        def run(eng, pre_t, post_t):
+            l, d = eng.net(pre_t.to(eng.device), post_t.to(eng.device))
+            return torch.sigmoid(l[0]).cpu().numpy(), torch.softmax(d[0], 0).cpu().numpy()
+
+        for bi, y in enumerate(ys):
+            for x in xs:
+                post_t = norm(post_rgb[y:y + wy, x:x + wx])
+                cover = 1.0 if valid is None else float(valid[y:y + wy, x:x + wx].mean())
+                with _LOCK:
+                    if fallback is None or cover > 0.999:
+                        l, d = run(self, norm(pre_rgb[y:y + wy, x:x + wx]), post_t)
+                    elif cover < 0.001:
+                        l, d = run(fallback, post_t, post_t)
+                    else:
+                        l, d = run(self, norm(pre_rgb[y:y + wy, x:x + wx]), post_t)
+                        lf, df = run(fallback, post_t, post_t)
+                        v = np.pad(valid[y:y + wy, x:x + wx], ((0, wy - min(wy, h - y)), (0, wx - min(wx, w - x))))
+                        l, d = np.where(v, l, lf), np.where(v, d, df)
+                ch, cw = min(wy, h - y), min(wx, w - x)
+                acc_loc[:ch, x:x + cw] += l[:ch, :cw]
+                acc_dmg[:, :ch, x:x + cw] += d[:, :ch, :cw]
+                hits[:ch, x:x + cw] += 1
+                done += 1
+                if progress:
+                    progress(done, total)
+            last = bi == len(ys) - 1
+            end = h if last else ys[bi + 1]              # rows below `end` are still to be covered by the next band
+            n = end - y
+            q = lambda a: np.clip(a * 255 + 0.5, 0, 255).astype(np.uint8)
+            out_loc[y:end] = q(acc_loc[:n] / hits[:n])
+            out_dmg[:, y:end] = q(acc_dmg[:, :n] / hits[:n])
+            if not last:
+                keep = y + wy - end
+                for a in (acc_loc, acc_dmg, hits):
+                    a[..., :keep, :] = a[..., n:n + keep, :].copy()
+                    a[..., keep:, :] = 0
+        return out_loc, out_dmg
+
     def assess(self, split, pair_id):
         loc, dmg, dmg_prob, scene_score = self.predict_maps(split, pair_id)
         out = []
@@ -173,6 +230,7 @@ def discover_models() -> dict:
     spec = [
         ("clf_B", "Crop classifier B (pre + post)", "classifier", "B_r18_official"),
         ("clf_A", "Crop classifier A (post only)", "classifier", "A_r18_official"),
+        ("unet_paired_mis", "Siamese U-Net, trained with misaligned pairs (pre + post)", "unet", "S_r34_paired_mis"),
         ("unet_paired_ext", "Siamese U-Net, 80 epochs (pre + post)", "unet", "S_r34_paired_ext"),
         ("unet_paired", "Siamese U-Net, 40 epochs (pre + post)", "unet", "S_r34_paired"),
         ("unet_early", "Full-image U-Net (pre + post, early fusion)", "unet", "S_r34_early"),

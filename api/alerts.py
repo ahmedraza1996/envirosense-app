@@ -15,6 +15,7 @@ import numpy as np
 
 NAMES = ["no-damage", "minor-damage", "major-damage", "destroyed"]
 SEVERE = ("major-damage", "destroyed")
+EDGE_EPS_PX = 0.5       # outline simplification tolerance: well under a pixel, so outlines stay on the building edges
 MIN_AREA_PX = 25        # ignore specks (~5 m2 at 0.45 m/px)
 EPS_M = 30.0            # damage within this distance belongs to one area
 MIN_SEVERE_M2 = 250.0   # severely damaged roof area needed to raise an alert (about three houses)
@@ -32,6 +33,17 @@ def gdal_lonlat(gt):
     return lambda x, y: pixel_to_lonlat(gt, x, y)
 
 
+def outline(mask: np.ndarray, eps_px: float, k: int = 4) -> np.ndarray:
+    """Outer outline of the largest region of a boolean mask, as continuous image coordinates in which pixel (i, j)
+    covers [j, j + 1] x [i, i + 1] (the convention of an image drawn on a map, and of GDAL geotransforms). The mask is
+    traced at k times the resolution, so the outline follows pixel edges rather than pixel centres (which would
+    sit half a pixel inside and half a pixel up and left). Simplified to within eps_px."""
+    m = np.pad(np.kron(mask.astype(np.uint8), np.ones((k, k), np.uint8)), 1)
+    cnts, _ = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    c = cv2.approxPolyDP(max(cnts, key=cv2.contourArea), eps_px * k, True).reshape(-1, 2).astype(float)
+    return (c - 1 + 0.5) / k      # undo the padding; traced points are upsampled-pixel centres
+
+
 def structures(loc: np.ndarray, dmg: np.ndarray, dmg_prob: np.ndarray, to_lonlat, pixel_m: float) -> list:
     """Connected components of the predicted building mask, each with a majority damage class.
     to_lonlat(x, y) -> (lon, lat) maps image pixels to coordinates (any image size or projection)."""
@@ -43,14 +55,12 @@ def structures(loc: np.ndarray, dmg: np.ndarray, dmg_prob: np.ndarray, to_lonlat
             continue
         m = lab[y:y + h, x:x + w] == k
         votes = np.bincount(dmg[y:y + h, x:x + w][m] - 1, minlength=4)
-        probs = dmg_prob[:, y:y + h, x:x + w][:, m].mean(1)
-        cnts, _ = cv2.findContours(m.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        c = max(cnts, key=cv2.contourArea)
-        poly = cv2.approxPolyDP(c, 1.0, True).reshape(-1, 2) + (x, y)
+        probs = dmg_prob[:, y:y + h, x:x + w][:, m].mean(1) / (255.0 if dmg_prob.dtype == np.uint8 else 1.0)
+        poly = outline(m, EDGE_EPS_PX) + (x, y)
         if len(poly) < 3:
             continue
-        cx, cy = map(float, cent[k])
-        out.append({"id": f"S{len(out) + 1:04d}", "polygon_px": poly.astype(float).tolist(), "centroid_px": [cx, cy],
+        cx, cy = float(cent[k][0]) + 0.5, float(cent[k][1]) + 0.5      # centroid of pixel centres -> pixel-edge coordinates
+        out.append({"id": f"S{len(out) + 1:04d}", "polygon_px": poly.tolist(), "centroid_px": [cx, cy],
                     "centroid_lonlat": list(to_lonlat(cx, cy)), "area_m2": float(area * pixel_m ** 2),
                     "predicted": int(votes.argmax()), "probs": probs.tolist(), "confidence": float(probs.max()),
                     "mask_bbox": [int(x), int(y), int(w), int(h)], "label": int(k)})
@@ -66,7 +76,7 @@ def area_alerts(loc: np.ndarray, dmg: np.ndarray, structs: list, pair_id: str, t
     r = max(1, int(round(EPS_M / 2 / pixel_m)))
     grown = cv2.dilate(severe.astype(np.uint8), cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1)))
     n, lab = cv2.connectedComponents(grown, connectivity=8)
-    cent = np.array([s["centroid_px"] for s in structs]) if structs else np.zeros((0, 2))
+    cent = np.array([s["centroid_px"] for s in structs]) - 0.5 if structs else np.zeros((0, 2))   # back to pixel indices
     cls = [NAMES[s["predicted"]] for s in structs]
     alerts, below = [], []
     h, w = loc.shape
@@ -76,13 +86,12 @@ def area_alerts(loc: np.ndarray, dmg: np.ndarray, structs: list, pair_id: str, t
         sev_m2 = sev_px * pixel_m ** 2
         inside = [i for i in range(len(structs)) if region[int(min(cent[i][1], h - 1)), int(min(cent[i][0], w - 1))]]
         ys, xs = np.nonzero(severe & region)
-        cx, cy = float(xs.mean()), float(ys.mean())
+        cx, cy = float(xs.mean()) + 0.5, float(ys.mean()) + 0.5
         lon, lat = to_lonlat(cx, cy)
         if sev_m2 < MIN_SEVERE_M2:
             below.append({"centroid_px": [cx, cy], "centroid_lat": lat, "centroid_lon": lon, "severe_m2": sev_m2})
             continue
-        cnts, _ = cv2.findContours(region.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        ring = cv2.approxPolyDP(max(cnts, key=cv2.contourArea), 2.0, True).reshape(-1, 2).astype(float).tolist()
+        ring = outline(region, 2.0).tolist()
         ring.append(ring[0])
         counts = {c: sum(cls[i] == c for i in inside) for c in NAMES}
         share = sev_px / bld_px if bld_px else 0.0

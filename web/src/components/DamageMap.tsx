@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import L from "leaflet";
 import { ImageOverlay, MapContainer, useMap } from "react-leaflet";
-import { api, Assessment, CLASS_COLOUR, CLASS_LABEL, CLASSES, Feature, FOOTPRINT_COLOUR, NOT_DETECTED_COLOUR } from "../api";
+import { api, Assessment, Context, CLASS_COLOUR, CLASS_LABEL, CLASSES, Feature, FOOTPRINT_COLOUR, NOT_DETECTED_COLOUR, Reviews } from "../api";
 import type { Focus, Mode } from "../App";
 import type { Scene } from "../api";
 import GeoMap from "./GeoMap";
@@ -9,6 +9,8 @@ import GeoMap from "./GeoMap";
 export interface MapOptions {
   phase: "pre" | "post"; damage: boolean; compare: boolean; mismatches: boolean; zones: boolean; pixelMap: boolean;
   satellite: boolean;   // geographic view only: draw the satellite image over the street map
+  satelliteOpacity: number;
+  facilities: boolean;  // geographic view only: hospitals, schools, ... from OpenStreetMap
 }
 
 const LABELLED_ZONES = 5;
@@ -21,6 +23,7 @@ interface Props {
   options: MapOptions; onOptions: (o: MapOptions) => void;
   selected: string | null; onSelect: (id: string | null) => void; focus: Focus; mode: Mode;
   scenes: Scene[]; onScene: (id: string) => void; message?: string;
+  reviews: Reviews | null; alertId: string | null; context: Context | null;
 }
 
 function Buildings({ features, options, selected, onSelect, toLatLng }: { features: Feature[]; options: MapOptions; selected: string | null; onSelect: (id: string) => void; toLatLng: ToLatLng }) {
@@ -63,18 +66,24 @@ function Buildings({ features, options, selected, onSelect, toLatLng }: { featur
   return null;
 }
 
-function Areas({ assessment, mode, toLatLng }: { assessment: Assessment; mode: Mode; toLatLng: ToLatLng }) {
+function Areas({ assessment, mode, toLatLng, reviews, alertId }: { assessment: Assessment; mode: Mode; toLatLng: ToLatLng; reviews: Reviews | null; alertId: string | null }) {
   const map = useMap();
   useEffect(() => {
-    // Area mode: every alert area, numbered as in the alert list. Building mode: the top priority areas.
-    const areas = mode === "area" ? (assessment.alerts ?? []) : assessment.zones.slice(0, LABELLED_ZONES);
-    const group = L.layerGroup(areas.map((z, i) =>
-      L.polygon(z.hull_px.map(([x, y]) => toLatLng(x, y)),
-        { color: "#1C1B19", weight: 1.5, dashArray: "5 4", fill: false, interactive: false })
-        .bindTooltip(String(i + 1), { permanent: true, direction: "center", className: "zone-label" }),
-    )).addTo(map);
+    // Area mode: every alert area that is not dismissed, numbered as in the alert list; confirmed ones with a solid outline.
+    // Building mode: the top priority areas.
+    const all = mode === "area" ? (assessment.alerts ?? []) : assessment.zones.slice(0, LABELLED_ZONES);
+    const group = L.layerGroup(all.map((z, i) => {
+      const id = "alert_id" in z ? (z as { alert_id: string }).alert_id : null;
+      const status = id ? reviews?.alerts[id]?.status ?? "pending" : "pending";
+      if (status === "dismissed") return null;
+      const sel = id !== null && id === alertId;
+      return L.polygon(z.hull_px.map(([x, y]) => toLatLng(x, y)),
+        { color: "#1C1B19", weight: sel ? 4 : status === "confirmed" ? 3 : 1.5, dashArray: status === "confirmed" ? undefined : "5 4",
+          fill: sel, fillOpacity: 0.12, interactive: false })
+        .bindTooltip(String(i + 1), { permanent: true, direction: "center", className: "zone-label" });
+    }).filter((x): x is L.Polygon => x !== null)).addTo(map);
     return () => { group.remove(); };
-  }, [map, assessment, mode, toLatLng]);
+  }, [map, assessment, mode, toLatLng, reviews, alertId]);
   return null;
 }
 
@@ -85,7 +94,7 @@ function Controller({ focus, pairId, bounds, toLatLng }: { focus: Focus; pairId?
   return null;
 }
 
-function LayersMenu({ options, set, hasPixelMap, mode, geo }: { options: MapOptions; set: (p: Partial<MapOptions>) => void; hasPixelMap: boolean; mode: Mode; geo: boolean }) {
+function LayersMenu({ options, set, hasPixelMap, mode, geo, context }: { options: MapOptions; set: (p: Partial<MapOptions>) => void; hasPixelMap: boolean; mode: Mode; geo: boolean; context: Context | null }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -110,13 +119,21 @@ function LayersMenu({ options, set, hasPixelMap, mode, geo }: { options: MapOpti
           {item("zones", mode === "area" ? "Alert areas" : "Priority areas")}
           {item("pixelMap", "Pixel damage map", !hasPixelMap)}
           {geo && item("satellite", "Satellite image")}
+          {geo && options.satellite && (
+            <label className="slider">
+              Image opacity
+              <input type="range" min={0.1} max={1} step={0.05} value={options.satelliteOpacity}
+                onChange={(e) => set({ satelliteOpacity: Number(e.target.value) })} aria-label="Satellite image opacity" />
+            </label>
+          )}
+          {geo && mode === "area" && item("facilities", context?.available === null ? "Facilities (loading…)" : "Facilities (OpenStreetMap)", !context?.available)}
         </div>
       )}
     </div>
   );
 }
 
-export default function DamageMap({ assessment, loading, error, options, onOptions, selected, onSelect, focus, mode, scenes, onScene, message }: Props) {
+export default function DamageMap({ assessment, loading, error, options, onOptions, selected, onSelect, focus, mode, scenes, onScene, message, reviews, alertId, context }: Props) {
   const set = (patch: Partial<MapOptions>) => onOptions({ ...options, ...patch });
   const features = useMemo(() => assessment?.features ?? [], [assessment]);
   const w = assessment?.scene.width_px ?? 1024;
@@ -129,7 +146,7 @@ export default function DamageMap({ assessment, loading, error, options, onOptio
     <main className="map">
       {view === "geo" && assessment && gt ? (
         <GeoMap assessment={assessment} gt={gt} options={options} selected={selected} onSelect={onSelect}
-          focus={focus} mode={mode} scenes={scenes} onScene={onScene} />
+          focus={focus} mode={mode} scenes={scenes} onScene={onScene} reviews={reviews} alertId={alertId} context={context} />
       ) : (
       <MapContainer crs={L.CRS.Simple} bounds={bounds} minZoom={-2} maxZoom={4} zoomSnap={0.25} preferCanvas attributionControl={false}
         style={{ height: "100%" }}>
@@ -140,7 +157,7 @@ export default function DamageMap({ assessment, loading, error, options, onOptio
               <ImageOverlay key={"pm" + assessment.id} url={api.damageMapUrl(assessment.id)} bounds={bounds} opacity={0.8} />
             )}
             <Buildings features={features} options={options} selected={selected} onSelect={onSelect} toLatLng={toLatLng} />
-            {options.zones && options.phase === "post" && <Areas assessment={assessment} mode={mode} toLatLng={toLatLng} />}
+            {options.zones && options.phase === "post" && <Areas assessment={assessment} mode={mode} toLatLng={toLatLng} reviews={reviews} alertId={alertId} />}
           </>
         )}
         <Controller focus={focus} pairId={assessment?.pair_id} bounds={bounds} toLatLng={toLatLng} />
@@ -159,7 +176,7 @@ export default function DamageMap({ assessment, loading, error, options, onOptio
               <button aria-pressed={options.phase === "post"} onClick={() => set({ phase: "post" })}>After</button>
             </div>
           </div>
-          <LayersMenu options={options} set={set} hasPixelMap={assessment.has_damage_map} mode={mode} geo={view === "geo"} />
+          <LayersMenu options={options} set={set} hasPixelMap={assessment.has_damage_map} mode={mode} geo={view === "geo"} context={context} />
         </div>
       )}
 

@@ -176,3 +176,39 @@ dl.facts dt { color: var(--ink-3); } dl.facts dd { margin: 0; }
 
 .swatch.footprint { border: 1.5px solid #2457A6; background: rgba(36,87,166,.15); }
 .copy-corners { grid-column: 1 / -1; justify-self: start; font-size: 12px; }
+
+/* Alert review, export, context */
+.review-card { margin-top: 14px; padding: 12px 14px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--bg); display: grid; gap: 10px; }
+.review-head { display: flex; align-items: baseline; gap: 10px; }
+.review-head .status { margin-left: auto; }
+.review-card .stats { margin: 0; }
+.mono { font-family: var(--mono); font-size: 12px; }
+.status { font-size: 12px; font-weight: 500; white-space: nowrap; }
+.status-pending { color: var(--ink-3); } .status-confirmed { color: var(--none); } .status-needs_info { color: var(--warn); } .status-dismissed { color: var(--undetected); }
+tr.selected td { background: var(--accent-soft); }
+tr.dismissed td { color: var(--ink-3); text-decoration: line-through; }
+.field-block { display: grid; gap: 4px; font-size: 12px; color: var(--ink-3); }
+.field-block textarea { width: 100%; resize: vertical; border: 1px solid var(--line-strong); border-radius: var(--radius); padding: 6px 8px; background: var(--surface); font: inherit; color: var(--ink); }
+.field-block textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.btn-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.error-text { color: var(--destroyed); }
+.context { margin: 0; padding-left: 16px; display: grid; gap: 2px; color: var(--ink-2); }
+.context .flag { color: var(--destroyed); font-weight: 500; }
+.export-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; margin-top: 12px; }
+.inline-check { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-3); }
+.facility span { display: grid; place-items: center; width: 18px; height: 18px; border-radius: 3px; background: var(--surface); border: 1.5px solid var(--ink);
+  color: var(--ink); font: 600 10px/1 var(--sans); box-shadow: 0 1px 3px rgba(0,0,0,.25); }
+
+/* Upload actions */
+.item-actions { display: flex; gap: 12px; align-items: center; margin-top: 2px; }
+.item-actions .danger { color: var(--destroyed); }
+.rename-input { height: 26px; width: 100%; border: 1px solid var(--accent); border-radius: 4px; padding: 0 6px; font: inherit; }
+
+/* Event view */
+.event-map-label { font-size: 11px; }
+.rank-note { color: var(--ink-3); font-size: 12px; margin-top: 8px; }
+.progress { height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; margin-top: 8px; }
+.progress span { display: block; height: 100%; background: var(--accent); transition: width .3s; }
+
+.layers-menu label.slider { display: grid; gap: 4px; color: var(--ink-2); cursor: default; }
+.layers-menu label.slider input { width: 100%; }

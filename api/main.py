@@ -2,16 +2,17 @@
 
   uv run uvicorn app.api.main:app --host 127.0.0.1 --port 8000      (scripts/app.sh)
 """
+import json
 import re
 import shutil
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import report, service, uploads
+from . import context, events, geoimage, report, reviews, service, uploads
 from .scenes import catalogue, image_jpeg, scene
 
 app = FastAPI(title="EnviroSense damage assessment", version="0.1")
@@ -145,6 +146,152 @@ def get_upload(uid: str):
         raise HTTPException(404, f"no upload {uid}")
 
 
+class UploadEdit(BaseModel):
+    name: str | None = None
+    disaster_type: str | None = None
+    event_date: str | None = None
+
+
+@app.patch("/api/uploads/{uid}")
+def edit_upload(uid: str, body: UploadEdit):
+    try:
+        return uploads.update(uid, body.name, body.disaster_type, body.event_date)
+    except KeyError:
+        raise HTTPException(404, f"no upload {uid}")
+    except uploads.imagery.ImageryError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.delete("/api/uploads/{uid}")
+def delete_upload(uid: str):
+    try:
+        uploads.delete(uid)
+    except KeyError:
+        raise HTTPException(404, f"no upload {uid}")
+    except uploads.imagery.ImageryError as e:
+        raise HTTPException(409, str(e))
+    return {"deleted": uid}
+
+
+# ---- analyst review and export ------------------------------------------------------------------------------
+
+def area_record_or_404(aid):
+    rec = json.loads(stored(aid).read_text())
+    if rec.get("kind") != "area":
+        raise HTTPException(400, "alerts exist for area assessments only")
+    return rec
+
+
+class ReviewBody(BaseModel):
+    status: str
+    note: str = ""
+
+
+@app.get("/api/assessments/{aid}/reviews")
+def get_reviews(aid: str):
+    rec = area_record_or_404(aid)
+    r = reviews.load(aid)
+    return {"alerts": {a["alert_id"]: reviews.entry(r, a["alert_id"]) for a in rec["alerts"]}, "counts": reviews.counts(rec, r)}
+
+
+@app.put("/api/assessments/{aid}/alerts/{alert_id}/review")
+def put_review(aid: str, alert_id: str, body: ReviewBody):
+    rec = area_record_or_404(aid)
+    try:
+        e = reviews.set_review(aid, rec, alert_id, body.status, body.note)
+    except KeyError:
+        raise HTTPException(404, f"no alert {alert_id} in {aid}")
+    except reviews.ReviewError as err:
+        raise HTTPException(400, str(err))
+    return {"alert_id": alert_id, **e, "counts": reviews.counts(rec, reviews.load(aid))}
+
+
+def _include(include: str | None):
+    return [x for x in (include or "").split(",") if x] or None
+
+
+def _cached_context(aid):
+    p = service.CACHE / "osm" / f"{aid}.json"
+    return json.loads(p.read_text()) if p.exists() else None
+
+
+@app.get("/api/assessments/{aid}/export.geojson")
+def export_geojson(aid: str, layer: str = "alerts", include: str | None = None):
+    """Alerts (default) or detected structures as GeoJSON (EPSG:4326). include = comma-separated review statuses;
+    dismissed alerts are left out unless listed."""
+    rec = area_record_or_404(aid)
+    if layer not in ("alerts", "structures"):
+        raise HTTPException(400, "layer must be alerts or structures")
+    try:
+        data = (reviews.alerts_geojson(rec, reviews.load(aid), _include(include), _cached_context(aid)) if layer == "alerts"
+                else reviews.structures_geojson(rec))
+    except reviews.ReviewError as e:
+        raise HTTPException(400, str(e))
+    return JSONResponse(data, media_type="application/geo+json",
+                        headers={"Content-Disposition": f'attachment; filename="{layer}_{aid}.geojson"'})
+
+
+@app.get("/api/assessments/{aid}/export.csv", response_class=PlainTextResponse)
+def export_csv(aid: str, include: str | None = None):
+    rec = area_record_or_404(aid)
+    try:
+        text = reviews.alerts_csv(rec, reviews.load(aid), _include(include), _cached_context(aid))
+    except reviews.ReviewError as e:
+        raise HTTPException(400, str(e))
+    return PlainTextResponse(text, media_type="text/csv", headers={"Content-Disposition": f'attachment; filename="alerts_{aid}.csv"'})
+
+
+@app.get("/api/assessments/{aid}/context")
+def get_context(aid: str, refresh: bool = False):
+    """Facilities and roads around the alerts (OpenStreetMap). available=null while it is fetched; poll again."""
+    rec = area_record_or_404(aid)
+    res = context.for_assessment(aid, rec, refresh)
+    return {k: v for k, v in res.items() if not k.startswith("_")}
+
+
+# ---- events ---------------------------------------------------------------------------------------------------
+
+class EventJob(BaseModel):
+    model_id: str
+    limit: int = 10
+
+
+def known_unet(model_id):
+    m = service.models()
+    if model_id not in m or m[model_id]["kind"] != "unet":
+        raise HTTPException(400, "events use a full-image U-Net model")
+
+
+@app.get("/api/events")
+def get_events(model_id: str):
+    known_unet(model_id)
+    return events.list_events(model_id)
+
+
+@app.get("/api/events/job")
+def get_event_job():
+    return events.job_state()
+
+
+@app.get("/api/events/{disaster}")
+def get_event(disaster: str, model_id: str):
+    known_unet(model_id)
+    try:
+        return events.detail(disaster, model_id)
+    except KeyError:
+        raise HTTPException(404, f"unknown event {disaster}")
+
+
+@app.post("/api/events/{disaster}/assess")
+def assess_event(disaster: str, body: EventJob):
+    """Assess up to `limit` tiles of the event that have no result yet, spread over the event (one at a time, in the background)."""
+    known_unet(body.model_id)
+    try:
+        return events.start(disaster, body.model_id, min(body.limit, 50))
+    except KeyError:
+        raise HTTPException(404, f"unknown event {disaster}")
+
+
 @app.post("/api/assess")
 def run_assessment(req: AssessRequest):
     known_scene(req.pair_id)
@@ -192,11 +339,31 @@ def get_assessment(aid: str):
 
 @app.get("/api/assessments/{aid}/summary")
 def get_summary(aid: str):
-    import json
     rec = json.loads(stored(aid).read_text())
     keys = ("id", "kind", "scene", "model", "summary", "zones", "alerts", "alert_rule", "isolated_severe", "benchmark",
             "scene_metrics", "review_confidence_threshold", "has_damage_map")
     return {k: rec[k] for k in keys if k in rec}
+
+
+@app.get("/api/assessments/{aid}/geo/{layer}")
+def get_geo_layer(aid: str, layer: str):
+    """North-up copy of the after / before image or the damage map for the street-map view (rotated geotransforms only)."""
+    if layer not in ("pre", "post", "damage"):
+        raise HTTPException(400, "layer must be pre, post or damage")
+    rec = json.loads(stored(aid).read_text())
+    sc = rec["scene"]
+    if not sc.get("geo_bounds"):
+        raise HTTPException(404, "this image is north-up already; use the ordinary image")
+    out = service.CACHE / "geo" / f"{aid}_{layer}.webp"
+    if not out.exists():
+        import cv2
+        out.parent.mkdir(parents=True, exist_ok=True)
+        if layer == "damage":
+            img = cv2.cvtColor(cv2.imread(str(service.STORE / f"{aid}_damage.png"), cv2.IMREAD_UNCHANGED), cv2.COLOR_BGRA2RGBA)
+        else:
+            img = service.record_image(rec, layer)
+        out.write_bytes(geoimage.north_up(img, sc["geotransform"], sc["pixel_size_m"]))
+    return FileResponse(out, media_type="image/webp")
 
 
 @app.get("/api/assessments/{aid}/damage-map")

@@ -27,18 +27,53 @@ export interface Scene {
   // uploads only
   source?: "upload"; name?: string; width_px?: number; height_px?: number; event_date?: string | null;
   before?: BeforeInfo; notes?: string[];
+  geo_bounds?: [[number, number], [number, number]] | null;   // rotated geotransform: bounds of the north-up copies
+  geo_fit_error_m?: number;
 }
 
 export interface BeforeInfo {
   kind: "archive" | "upload"; archive?: string; file?: string;
   tiles?: { tile: string; capture_date: string; covers: number }[];
   coverage: number; shift_px: [number, number] | null; shift_m: number | null; response: number | null; corrected: boolean;
+  method?: string | null; rotation_deg?: number; scale?: number; matches?: number | null; inliers?: number | null;
 }
 
 export interface Upload {
   id: string; name: string; disaster_type: string; event_date: string | null; model_id: string; created_utc: string;
   after_file: string; before_file: string | null;
   status: { state: "queued" | "running" | "done" | "failed"; step?: string; error?: string; assessment_id?: string; alerts?: number };
+}
+
+export type ReviewStatus = "pending" | "confirmed" | "dismissed" | "needs_info";
+export const REVIEW_LABEL: Record<ReviewStatus, string> = {
+  pending: "Draft", confirmed: "Confirmed", dismissed: "Dismissed", needs_info: "Needs information",
+};
+export interface ReviewEntry { status: ReviewStatus; note: string; reviewed_by: string | null; reviewed_utc: string | null }
+export interface Reviews { alerts: Record<string, ReviewEntry>; counts: Record<ReviewStatus, number> }
+
+export interface AlertContext {
+  inside: { kind: string; name: string | null }[];
+  within_1km: Record<string, number>;
+  nearest_hospital: { name: string | null; distance_m: number } | null;
+  nearest_main_road: { class: string; name: string | null; distance_m: number } | null;
+  flags: string[];
+}
+export interface Facility { kind: string; name: string | null; lat: number; lon: number; id: string }
+export interface Context {
+  available: boolean | null; state?: string; error?: string; source?: string; fetched_utc?: string;
+  facilities: Facility[]; alerts: Record<string, AlertContext>;
+}
+
+export interface EventSummary { disaster: string; disaster_type: string; tiles: number; assessed: number; alerts: number; xbd_severe: number }
+export interface EventTile {
+  pair_id: string; tile: string; centre_lat: number; centre_lon: number; xbd_buildings: number; xbd_severe: number;
+  assessed: boolean; rank: number | null; alerts?: number; high?: number; medium?: number; severe_m2?: number; structures?: number;
+}
+export interface EventJob { state: "idle" | "running" | "done" | "failed"; disaster?: string; done?: number; total?: number; current?: string | null; error?: string }
+export interface EventDetail {
+  disaster: string; model_id: string; tiles: EventTile[]; rank_agreement_with_xbd: number | null; job: EventJob;
+  alerts: { pair_id: string; alert_id: string; severity: "high" | "medium"; severe_m2: number; ring: [number, number][] }[];
+  frames: { pair_id: string; assessed: boolean; ring: [number, number][] }[];
 }
 
 export const DISASTER_TYPES = ["earthquake", "fire", "flooding", "wind", "tsunami", "volcano", "other"];
@@ -119,8 +154,26 @@ export const api = {
   assessment: (aid: string) => fetch(`/api/assessments/${aid}`).then(json<Assessment>),
   uploads: () => fetch("/api/uploads").then(json<Upload[]>),
   upload: (form: FormData) => fetch("/api/uploads", { method: "POST", body: form }).then(json<Upload>),
+  reviews: (aid: string) => fetch(`/api/assessments/${aid}/reviews`).then(json<Reviews>),
+  review: (aid: string, alertId: string, status: ReviewStatus, note: string) =>
+    fetch(`/api/assessments/${aid}/alerts/${alertId}/review`, {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status, note }),
+    }).then(json<ReviewEntry & { counts: Record<ReviewStatus, number> }>),
+  context: (aid: string) => fetch(`/api/assessments/${aid}/context`).then(json<Context>),
+  exportUrl: (aid: string, kind: "alerts.geojson" | "structures.geojson" | "csv", include?: string) =>
+    kind === "csv" ? `/api/assessments/${aid}/export.csv${include ? `?include=${include}` : ""}`
+      : `/api/assessments/${aid}/export.geojson?layer=${kind.split(".")[0]}${include ? `&include=${include}` : ""}`,
+  editUpload: (id: string, patch: { name?: string; disaster_type?: string; event_date?: string }) =>
+    fetch(`/api/uploads/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch) }).then(json<Upload>),
+  deleteUpload: (id: string) => fetch(`/api/uploads/${id}`, { method: "DELETE" }).then(json<{ deleted: string }>),
+  events: (model: string) => fetch(`/api/events?model_id=${model}`).then(json<EventSummary[]>),
+  event: (disaster: string, model: string) => fetch(`/api/events/${disaster}?model_id=${model}`).then(json<EventDetail>),
+  assessEvent: (disaster: string, model_id: string, limit: number) =>
+    fetch(`/api/events/${disaster}/assess`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model_id, limit }) }).then(json<EventJob>),
+  eventJob: () => fetch("/api/events/job").then(json<EventJob>),
   imageUrl: (pair_id: string, phase: "pre" | "post") => `/api/scenes/${pair_id}/image/${phase}`,
   cropUrl: (aid: string, fid: string, phase: "pre" | "post") => `/api/assessments/${aid}/features/${fid}/crop/${phase}`,
+  geoUrl: (id: string, layer: "pre" | "post" | "damage") => `/api/assessments/${id}/geo/${layer}`,
   damageMapUrl: (id: string) => `/api/assessments/${id}/damage-map`,
   reportUrl: (id: string, fmt: "html" | "md") => `/api/assessments/${id}/report.${fmt}`,
 };

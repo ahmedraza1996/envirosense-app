@@ -1,16 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
-import { api, Assessment, bestUnet, ModelInfo, Scene, tileNo, titleCase, Upload } from "./api";
+import { Alert, api, Assessment, bestUnet, Context, EventSummary, ModelInfo, Reviews, ReviewStatus, Scene, tileNo, titleCase, Upload } from "./api";
 import ScenePanel from "./components/ScenePanel";
 import UploadPanel from "./components/UploadPanel";
 import UploadDialog from "./components/UploadDialog";
 import DamageMap, { MapOptions } from "./components/DamageMap";
 import SummaryPanel from "./components/SummaryPanel";
 import AlertsPanel from "./components/AlertsPanel";
+import EventView, { EventList } from "./components/EventView";
 import BuildingInspector from "./components/BuildingInspector";
 
 export type Focus = { x: number; y: number; zoom: number; key: number } | null;
 export type Mode = "area" | "building";
-type Source = "xbd" | "upload";
+type Source = "xbd" | "upload" | "events";
 
 // Area alerts need no building inventory (full-image U-Net); the building check needs xBD outlines.
 const preferred = (models: ModelInfo[], mode: Mode) =>
@@ -36,7 +37,12 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [focus, setFocus] = useState<Focus>(null);
-  const [opts, setOpts] = useState<MapOptions>({ phase: "post", damage: true, compare: false, mismatches: false, zones: true, pixelMap: false, satellite: false });
+  const [opts, setOpts] = useState<MapOptions>({ phase: "post", damage: true, compare: false, mismatches: false, zones: true, pixelMap: false, satellite: false, satelliteOpacity: 0.92, facilities: true });
+  const [alertId, setAlertId] = useState<string | null>(null);
+  const [reviews, setReviews] = useState<Reviews | null>(null);
+  const [context, setContext] = useState<Context | null>(null);
+  const [events, setEvents] = useState<EventSummary[]>([]);
+  const [eventName, setEventName] = useState<string | null>(null);
 
   useEffect(() => {
     Promise.all([api.models(), api.scenes("hold"), api.uploads()])
@@ -72,6 +78,7 @@ export default function App() {
     setSource(s);
     setSelected(null);
     setAssessment(null);
+    setLoading(false);       // a load abandoned by this switch must not leave the panels on "Detecting damage…"
     setError(null);
     if (s === "upload") switchMode("area");
   };
@@ -96,7 +103,7 @@ export default function App() {
   useEffect(() => {
     if (source !== "upload") return;
     setSelected(null);
-    if (!uploadAid) { setAssessment(null); return; }
+    if (!uploadAid) { setAssessment(null); setLoading(false); return; }
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -107,8 +114,53 @@ export default function App() {
     return () => { cancelled = true; };
   }, [source, uploadAid]);
 
+  // Analyst reviews and nearby facilities belong to the assessment on screen.
+  const aid = assessment?.kind === "area" ? assessment.id : null;
+  useEffect(() => {
+    setAlertId(null);
+    setReviews(null);
+    setContext(null);
+    if (!aid) return;
+    let cancelled = false;
+    api.reviews(aid).then((r) => { if (!cancelled) setReviews(r); }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [aid]);
+  useEffect(() => {
+    if (!aid) return;
+    let cancelled = false, timer: ReturnType<typeof setTimeout>;
+    const poll = () => api.context(aid).then((c) => {
+      if (cancelled) return;
+      setContext(c);
+      if (c.available === null) timer = setTimeout(poll, 5000);
+    }).catch(() => undefined);
+    void poll();
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [aid]);
+
+  const review = async (id: string, status: ReviewStatus, note: string) => {
+    if (!aid) return;
+    const e = await api.review(aid, id, status, note);
+    setReviews((r) => r && { alerts: { ...r.alerts, [id]: { status: e.status, note: e.note, reviewed_by: e.reviewed_by, reviewed_utc: e.reviewed_utc } }, counts: e.counts });
+  };
+
+  const rename = async (id: string, name: string) => {
+    const u = await api.editUpload(id, { name });
+    setUploads((xs) => xs.map((x) => (x.id === id ? u : x)));
+    setAssessment((a) => (a && a.pair_id === id ? { ...a, scene: { ...a.scene, name: u.name, disaster: u.name } } : a));
+  };
+  const remove = async (id: string) => {
+    await api.deleteUpload(id);
+    setUploads((xs) => xs.filter((x) => x.id !== id));
+    if (uploadId === id) { setUploadId(null); setAssessment(null); }
+  };
+
+  const loadEvents = () => { const m = bestUnet(models); if (m) api.events(m.id).then(setEvents).catch((e) => setError(String(e))); };
+  useEffect(() => { if (source === "events") loadEvents(); }, [source, models]);
+  const openTile = (pairId: string) => { setSource("xbd"); setMode("area"); setSceneId(pairId); setSelected(null); setAssessment(null); };
+
   const building = useMemo(() => assessment?.features.find((f) => f.id === selected) ?? null, [assessment, selected]);
   const zoomTo = (p: { centroid_px: [number, number] }) => setFocus({ x: p.centroid_px[0], y: p.centroid_px[1], zoom: 1, key: Date.now() });
+  const openAlert = (a: Alert) => { setAlertId(a.alert_id); zoomTo(a); };
 
   const uploadMessage = source !== "upload" ? undefined
     : !upload ? "Select an upload, or upload imagery"
@@ -125,6 +177,11 @@ export default function App() {
               <span>xBD hold set</span>
               {assessment && (<><span className="slash">/</span><span>{titleCase(assessment.scene.disaster)}</span>
                 <span className="slash">/</span><span>Tile {tileNo(assessment.pair_id)}</span></>)}
+            </>
+          ) : source === "events" ? (
+            <>
+              <span>Events</span>
+              {eventName && (<><span className="slash">/</span><span>{titleCase(eventName)}</span></>)}
             </>
           ) : (
             <>
@@ -162,26 +219,36 @@ export default function App() {
               <button aria-pressed={source === "upload"} onClick={() => switchSource("upload")}>
                 Uploads{uploads.length > 0 && <span className="tab-count">{uploads.length}</span>}
               </button>
+              <button aria-pressed={source === "events"} onClick={() => switchSource("events")}>Events</button>
             </div>
           </div>
           {source === "xbd"
             ? <ScenePanel scenes={scenes} disasters={disasters} sceneId={sceneId} onScene={setSceneId} />
-            : <UploadPanel uploads={uploads} uploadId={uploadId} onUpload={setUploadId} onNew={() => setDialog(true)} />}
+            : source === "upload"
+              ? <UploadPanel uploads={uploads} uploadId={uploadId} onUpload={setUploadId} onNew={() => setDialog(true)} onRename={rename} onDelete={remove} />
+              : <EventList events={events} selected={eventName} onSelect={setEventName} model={bestUnet(models)} />}
         </nav>
-        <DamageMap
-          assessment={assessment} loading={loading} error={error} options={opts} onOptions={setOpts} message={uploadMessage}
-          selected={selected} onSelect={setSelected} focus={focus} mode={mode} scenes={scenes}
-          onScene={(id) => { switchSource("xbd"); setSceneId(id); }}
-        />
-        <aside className="detail">
-          {building && assessment ? (
-            <BuildingInspector assessment={assessment} feature={building} onBack={() => setSelected(null)} />
-          ) : mode === "area" ? (
-            <AlertsPanel assessment={assessment} loading={loading || (!!upload && pending(upload))} onAlert={zoomTo} />
-          ) : (
-            <SummaryPanel assessment={assessment} loading={loading} onZone={zoomTo} onBuilding={setSelected} />
-          )}
-        </aside>
+        {source === "events" ? (
+          <EventView disaster={eventName} modelId={bestUnet(models)?.id ?? null} onTile={openTile} onChanged={loadEvents} />
+        ) : (
+          <>
+            <DamageMap
+              assessment={assessment} loading={loading} error={error} options={opts} onOptions={setOpts} message={uploadMessage}
+              selected={selected} onSelect={setSelected} focus={focus} mode={mode} scenes={scenes}
+              onScene={(id) => { switchSource("xbd"); setSceneId(id); }} reviews={reviews} alertId={alertId} context={context}
+            />
+            <aside className="detail">
+              {building && assessment ? (
+                <BuildingInspector assessment={assessment} feature={building} onBack={() => setSelected(null)} />
+              ) : mode === "area" ? (
+                <AlertsPanel assessment={assessment} loading={loading || (!!upload && pending(upload))} onAlert={openAlert}
+                  alertId={alertId} reviews={reviews} onReview={review} context={context} />
+              ) : (
+                <SummaryPanel assessment={assessment} loading={loading} onZone={zoomTo} onBuilding={setSelected} />
+              )}
+            </aside>
+          </>
+        )}
       </div>
       {dialog && (
         <UploadDialog models={models} onClose={() => setDialog(false)}

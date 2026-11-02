@@ -1,6 +1,11 @@
-import { Alert, api, Assessment, BeforeInfo, CLASS_COLOUR, CLASS_LABEL, CLASSES, pct, tileNo, titleCase } from "../api";
+import { useEffect, useState } from "react";
+import { Alert, AlertContext, api, Assessment, BeforeInfo, CLASS_COLOUR, CLASS_LABEL, CLASSES, Context, pct, REVIEW_LABEL, ReviewEntry, Reviews, ReviewStatus, tileNo, titleCase } from "../api";
 
-interface Props { assessment: Assessment | null; loading: boolean; onAlert: (a: Alert) => void }
+interface Props {
+  assessment: Assessment | null; loading: boolean; onAlert: (a: Alert) => void;
+  alertId: string | null; reviews: Reviews | null; onReview: (alertId: string, status: ReviewStatus, note: string) => Promise<void>;
+  context: Context | null;
+}
 
 const latlon = (lat: number, lon: number) =>
   `${Math.abs(lat).toFixed(5)}°${lat >= 0 ? "N" : "S"}, ${Math.abs(lon).toFixed(5)}°${lon >= 0 ? "E" : "W"}`;
@@ -27,6 +32,13 @@ function BeforeImage({ a }: { a: Assessment }) {
         <dt>Source</dt><dd>{beforeSource(b)}</dd>
         <dt>Covers</dt><dd>{pct(b.coverage)} of the area</dd>
         <dt>Offset</dt><dd>{b.shift_m == null ? "not measured" : `${b.shift_m.toFixed(1)} m${b.corrected ? ", corrected" : ""}`}</dd>
+        {b.method && b.method !== "phase correlation" && (
+          <>
+            <dt>Rotation</dt><dd>{(b.rotation_deg ?? 0) >= 0 ? "+" : ""}{(b.rotation_deg ?? 0).toFixed(2)}°</dd>
+            <dt>Zoom</dt><dd>{(((b.scale ?? 1) - 1) * 100) >= 0 ? "+" : ""}{(((b.scale ?? 1) - 1) * 100).toFixed(1)}%</dd>
+            <dt>Registration</dt><dd title={`${b.matches} matches, ${b.inliers} agree`}>{b.method === "sift" ? "SIFT" : "DISK + LightGlue"}, {b.inliers} features</dd>
+          </>
+        )}
       </dl>
       <p className="meta">
         {b.coverage === 0
@@ -41,12 +53,87 @@ function BeforeImage({ a }: { a: Assessment }) {
   );
 }
 
-export default function AlertsPanel({ assessment: a, loading, onAlert }: Props) {
+function ContextLines({ c }: { c: AlertContext }) {
+  const near = Object.entries(c.within_1km).filter(([, n]) => n > 0).map(([k, n]) => `${n} ${k.toLowerCase()}${n === 1 ? "" : "s"}`).join(", ");
+  return (
+    <ul className="context">
+      {c.flags.map((f) => <li key={f} className="flag">{f}</li>)}
+      {c.nearest_hospital && <li>Nearest hospital: {c.nearest_hospital.name ?? "unnamed"}, {(c.nearest_hospital.distance_m / 1000).toFixed(1)} km</li>}
+      {c.nearest_main_road && <li>Nearest main road: {c.nearest_main_road.distance_m} m ({c.nearest_main_road.class})</li>}
+      {near && <li>Within 1 km: {near}</li>}
+    </ul>
+  );
+}
+
+function ReviewCard({ alert, index, entry, context, onReview }: {
+  alert: Alert; index: number; entry: ReviewEntry; context: Context | null;
+  onReview: (alertId: string, status: ReviewStatus, note: string) => Promise<void>;
+}) {
+  const [note, setNote] = useState(entry.note);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => { setNote(entry.note); setErr(null); }, [alert.alert_id, entry.note]);
+  const save = async (status: ReviewStatus) => {
+    setBusy(true);
+    setErr(null);
+    try { await onReview(alert.alert_id, status, note); } catch (e) { setErr(String(e)); } finally { setBusy(false); }
+  };
+  const c = context?.available ? context.alerts[alert.alert_id] : undefined;
+  return (
+    <div className="review-card">
+      <div className="review-head">
+        <strong>Alert {index}</strong>
+        <span className="scene-id">{alert.alert_id}</span>
+        <span className={`status status-${entry.status}`}>{REVIEW_LABEL[entry.status]}</span>
+      </div>
+      <dl className="stats">
+        <dt>Severely damaged roof</dt><dd>{area(alert.severe_area_m2)}</dd>
+        <dt>Severe structures</dt><dd>{alert.severe} of {alert.structures}</dd>
+        <dt>Location</dt><dd className="mono">{latlon(alert.centroid_lat, alert.centroid_lon)}</dd>
+      </dl>
+      {c && <ContextLines c={c} />}
+      {context?.available === null && <p className="meta">Looking up nearby facilities…</p>}
+      {context?.available === false && <p className="meta" title={context.error}>Nearby facilities unavailable (OpenStreetMap not reachable).</p>}
+      <label className="field-block">
+        <span>Note</span>
+        <textarea value={note} maxLength={500} rows={2} placeholder="Optional: what you checked, who was told" onChange={(e) => setNote(e.target.value)} />
+      </label>
+      <div className="btn-row">
+        <button className="button primary" disabled={busy} onClick={() => save("confirmed")}>Confirm</button>
+        <button className="button" disabled={busy} onClick={() => save("needs_info")}>Needs information</button>
+        <button className="button" disabled={busy} onClick={() => save("dismissed")}>Dismiss</button>
+        {entry.status !== "pending" && <button className="link" disabled={busy} onClick={() => { setNote(""); void save("pending"); }}>Reset</button>}
+      </div>
+      {entry.reviewed_utc && <p className="meta">{REVIEW_LABEL[entry.status]} {entry.reviewed_utc} UTC</p>}
+      {err && <p className="meta error-text">{err}</p>}
+    </div>
+  );
+}
+
+function ExportBar({ aid, hasDismissed }: { aid: string; hasDismissed: boolean }) {
+  const [withDismissed, setWithDismissed] = useState(false);
+  const include = withDismissed ? "pending,confirmed,needs_info,dismissed" : undefined;
+  return (
+    <div className="export-bar">
+      <span className="subtle">Export alerts</span>
+      <a className="link" href={api.exportUrl(aid, "alerts.geojson", include)} download>GeoJSON</a>
+      <a className="link" href={api.exportUrl(aid, "csv", include)} download>CSV</a>
+      <a className="link" href={api.exportUrl(aid, "structures.geojson")} download>Structures</a>
+      {hasDismissed && <label className="inline-check"><input type="checkbox" checked={withDismissed} onChange={(e) => setWithDismissed(e.target.checked)} />include dismissed</label>}
+    </div>
+  );
+}
+
+export default function AlertsPanel({ assessment: a, loading, onAlert, alertId, reviews, onReview, context }: Props) {
   if (!a || a.kind !== "area") {
     return <section><p className="empty-note">{loading ? "Detecting damage…" : "Select a tile or an upload to detect damage."}</p></section>;
   }
   const alerts = a.alerts ?? [];
-  const high = alerts.filter((x) => x.severity === "high").length;
+  const entryOf = (id: string): ReviewEntry => reviews?.alerts[id] ?? { status: "pending", note: "", reviewed_by: null, reviewed_utc: null };
+  const counts = reviews?.counts;
+  const selIndex = alerts.findIndex((x) => x.alert_id === alertId);
+  const live = alerts.filter((x) => entryOf(x.alert_id).status !== "dismissed");
+  const high = live.filter((x) => x.severity === "high").length;
   const p = a.summary.predicted;
   const b = a.benchmark && Object.keys(a.benchmark).length ? a.benchmark : null;
   const upload = a.scene.source === "upload";
@@ -63,29 +150,33 @@ export default function AlertsPanel({ assessment: a, loading, onAlert }: Props) 
 
       <section>
         <div className="headline">
-          <span className="value">{alerts.length}</span>
-          <span className="text">{alerts.length === 1 ? "area alert" : "area alerts"}{alerts.length > 0 && <> · {high} high, {alerts.length - high} medium</>}</span>
+          <span className="value">{live.length}</span>
+          <span className="text">{live.length === 1 ? "area alert" : "area alerts"}{live.length > 0 && <> · {high} high, {live.length - high} medium</>}</span>
         </div>
         {alerts.length > 0 ? (
           <table style={{ marginTop: 12 }}>
-            <thead><tr><th>#</th><th>Severity</th><th className="num">Severe roof</th><th className="num">Share</th><th className="num">Extent</th></tr></thead>
+            <thead><tr><th>#</th><th>Severity</th><th>Review</th><th className="num">Severe roof</th><th className="num">Share</th></tr></thead>
             <tbody>
               {alerts.map((x, i) => (
-                <tr key={x.alert_id} className="clickable" onClick={() => onAlert(x)} title={`${x.alert_id} · ${latlon(x.centroid_lat, x.centroid_lon)}`}>
+                <tr key={x.alert_id} className={`clickable ${x.alert_id === alertId ? "selected" : ""} ${entryOf(x.alert_id).status === "dismissed" ? "dismissed" : ""}`}
+                  onClick={() => onAlert(x)} title={`${x.alert_id} · ${latlon(x.centroid_lat, x.centroid_lon)}`}>
                   <td>{i + 1}</td>
                   <td><span className={`sev sev-${x.severity}`}>{x.severity === "high" ? "High" : "Medium"}</span></td>
+                  <td><span className={`status status-${entryOf(x.alert_id).status}`}>{REVIEW_LABEL[entryOf(x.alert_id).status]}</span></td>
                   <td className="num">{area(x.severe_area_m2)}</td>
                   <td className="num">{pct(x.severe_share)}</td>
-                  <td className="num">{area(x.area_m2)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         ) : <p className="empty-note" style={{ marginTop: 8 }}>No area meets the alert rule {upload ? "in this image" : "on this tile"}.</p>}
+        {selIndex >= 0 && <ReviewCard alert={alerts[selIndex]} index={selIndex + 1} entry={entryOf(alerts[selIndex].alert_id)} context={context} onReview={onReview} />}
         <p className="meta" style={{ marginTop: 10 }}>
           An alert is raised for at least 250 m² of severely damaged roof with damage within 30 m; high when at least half
-          of the building area there is severely damaged. Click a row to zoom; all alerts need analyst review.
+          of the building area there is severely damaged. Click a row to zoom and review it; alerts stay drafts until confirmed.
+          {counts && alerts.length > 0 && <> Review: {counts.confirmed} confirmed, {counts.needs_info} need information, {counts.pending} draft, {counts.dismissed} dismissed.</>}
         </p>
+        {alerts.length > 0 && <ExportBar aid={a.id} hasDismissed={(counts?.dismissed ?? 0) > 0} />}
       </section>
 
       {upload && <BeforeImage a={a} />}

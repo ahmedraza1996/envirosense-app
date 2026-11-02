@@ -100,6 +100,20 @@ def approx_geotransform(g: GeoImage) -> list:
     return [x0, (xw - x0) / w, (xh - x0) / h, y0, (yw - y0) / w, (yh - y0) / h]
 
 
+def geotransform_error_m(g: GeoImage) -> float:
+    """Largest distance (m) between the exact projection and the affine lon/lat fit (approx_geotransform) at the corner
+    not used in the fit, the centre and an edge midpoint: how far outlines placed with the affine can sit from the
+    true position. Zero for EPSG:4326 inputs; centimetres to decimetres for a UTM image of a few kilometres."""
+    f, gt = to_lonlat_fn(g), approx_geotransform(g)
+    h, w = g.shape
+    worst = 0.0
+    for x, y in ((w, h), (w / 2, h / 2), (w / 2, 0), (0, h / 2)):
+        lon, lat = f(x, y)
+        alon, alat = gt[0] + x * gt[1] + y * gt[2], gt[3] + x * gt[4] + y * gt[5]
+        worst = max(worst, math.hypot((lon - alon) * 111_320 * math.cos(math.radians(lat)), (lat - alat) * 110_574))
+    return worst
+
+
 def reproject_into(rgb: np.ndarray, transform: Affine, crs: CRS, dst: GeoImage):
     """Resample an image onto dst's grid. Returns (rgb, valid mask)."""
     h, w = dst.shape
@@ -124,13 +138,15 @@ def estimate_shift(pre: np.ndarray, post: np.ndarray, valid: np.ndarray):
         return None
     y0, y1, x0, x1 = ys.min(), ys.max() + 1, xs.min(), xs.max() + 1
 
+    f = min(0.5, 2048 / max(y1 - y0, x1 - x0))     # half resolution, less for very large images
+
     def prep(img):
         g = cv2.GaussianBlur(cv2.cvtColor(img[y0:y1, x0:x1], cv2.COLOR_RGB2GRAY).astype(np.float32), (0, 0), 2)
-        return cv2.resize(g, None, fx=0.5, fy=0.5, interpolation=cv2.INTER_AREA)
+        return cv2.resize(g, None, fx=f, fy=f, interpolation=cv2.INTER_AREA)
     a, b = prep(post), prep(pre)
     win = cv2.createHanningWindow(a.shape[::-1], cv2.CV_32F)
     (dx, dy), resp = cv2.phaseCorrelate(a, b, win)
-    return 2 * float(dx), 2 * float(dy), float(resp)
+    return float(dx) / f, float(dy) / f, float(resp)
 
 
 def shift_image(img: np.ndarray, valid: np.ndarray, dx: float, dy: float):
