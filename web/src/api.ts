@@ -13,11 +13,13 @@ export const NOT_DETECTED_COLOUR = "#8F8C84";
 // "Before" view: footprints the model found, drawn neutrally. Damage is only read, and only coloured, on the After image.
 export const FOOTPRINT_COLOUR = "#2457A6";
 
-export interface ModelInfo { id: string; label: string; kind: "classifier" | "unet"; run: string; test_score: number | null }
+export interface ModelInfo { id: string; label: string; kind: "classifier" | "unet"; run: string; test_score: number | null; approved_default?: boolean }
 
-/** Full-image model with the best xView2 test score: the default for area alerts and uploads. */
+/** Default full-image model for area alerts and uploads: the approved one (governance/approved_model.json); the best xView2 test
+ *  score is used only when no approval exists. */
 export const bestUnet = (models: ModelInfo[]) =>
-  models.filter((m) => m.kind === "unet").sort((a, b) => (b.test_score ?? 0) - (a.test_score ?? 0))[0];
+  models.find((m) => m.kind === "unet" && m.approved_default)
+  ?? models.filter((m) => m.kind === "unet").sort((a, b) => (b.test_score ?? 0) - (a.test_score ?? 0))[0];
 
 export interface Scene {
   pair_id: string; split: string; disaster: string; disaster_type: string; buildings: number;

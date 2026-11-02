@@ -13,6 +13,7 @@ estimate is good to about 0.05 degrees and the translation to about a pixel; a f
 removes what is left.
 """
 import math
+import os
 import threading
 from dataclasses import asdict, dataclass
 
@@ -27,6 +28,7 @@ MIN_INLIERS = 15
 MIN_RATIO = 0.05         # inliers / matches; low on purpose: after a disaster most matches sit on ground that has changed
 MIN_SPREAD = 0.15        # inlier hull area / image area: matches must not sit in one corner
 SCALE_RANGE = (0.7, 1.4)
+DEVICE = os.environ.get("REGISTRATION_DEVICE", "cpu")   # the app runs on the CPU; evaluation scripts may use a GPU
 _lock = threading.Lock()
 _models = {}
 
@@ -53,7 +55,7 @@ class Registration:
 def _learned():
     if "learned" not in _models:
         from kornia.feature import DISK, LightGlue
-        _models["learned"] = (DISK.from_pretrained("depth").eval(), LightGlue("disk").eval())
+        _models["learned"] = (DISK.from_pretrained("depth").eval().to(DEVICE), LightGlue("disk").eval().to(DEVICE))
     return _models["learned"]
 
 
@@ -66,10 +68,10 @@ def _gray(img, valid, scale):
 
 def _match_learned(a, b):
     disk, glue = _learned()
-    tens = lambda g: torch.from_numpy(g).float().div(255)[None, None].repeat(1, 3, 1, 1)
+    tens = lambda g: torch.from_numpy(g).float().div(255)[None, None].repeat(1, 3, 1, 1).to(DEVICE)
     with torch.no_grad():
         fa, fb = (disk(tens(g), n=N_KEYPOINTS, pad_if_not_divisible=True)[0] for g in (a, b))
-        size = lambda g: torch.tensor([[g.shape[1], g.shape[0]]], dtype=torch.float32)
+        size = lambda g: torch.tensor([[g.shape[1], g.shape[0]]], dtype=torch.float32, device=DEVICE)
         out = glue({"image0": {"keypoints": fa.keypoints[None], "descriptors": fa.descriptors[None], "image_size": size(a)},
                     "image1": {"keypoints": fb.keypoints[None], "descriptors": fb.descriptors[None], "image_size": size(b)}})
     m = out["matches"][0].cpu().numpy()

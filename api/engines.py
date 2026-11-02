@@ -247,6 +247,20 @@ def discover_models() -> dict:
     return found
 
 
+APPROVED = Path(__file__).resolve().parents[1] / "governance" / "approved_model.json"
+
+
+def approved_default(models: dict) -> str | None:
+    """Model id approved as the default for area alerts and uploads (governance/approved_model.json). The default is never
+    chosen silently from test scores: without an approval file, or when the approved model is missing, there is none and the
+    interface falls back to the best test score only for display."""
+    try:
+        mid = json.loads(APPROVED.read_text()).get("default_model")
+    except (OSError, ValueError):
+        return None
+    return mid if mid in models else None
+
+
 def load_engine(entry: dict, device="cpu"):
     return (ClassifierEngine if entry["kind"] == "classifier" else UNetEngine)(entry["run_dir"], device)
 

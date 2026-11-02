@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTex
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import context, events, geocal, geoimage, report, reviews, service, uploads
+from . import context, engines, events, geocal, geoimage, report, reviews, service, uploads
 from .scenes import catalogue, image_jpeg, scene
 
 app = FastAPI(title="EnviroSense damage assessment", version="0.1")
@@ -39,8 +39,10 @@ def health():
 
 @app.get("/api/models")
 def list_models():
-    return [{"id": m["id"], "label": m["label"], "kind": m["kind"], "run": m["run_dir"].name, "test_score": m["test_score"]}
-            for m in service.models().values()]
+    models = service.models()
+    default = engines.approved_default(models)
+    return [{"id": m["id"], "label": m["label"], "kind": m["kind"], "run": m["run_dir"].name, "test_score": m["test_score"],
+             "approved_default": m["id"] == default} for m in models.values()]
 
 
 @app.get("/api/scenes")
