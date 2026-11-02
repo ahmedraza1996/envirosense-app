@@ -1,7 +1,14 @@
 # envirosense-app
 
-Damage-assessment web app for the xBD capstone: pick a disaster tile, run a damage model, see damage on the map,
-inspect buildings, and get summary counts and priority areas.
+Damage-assessment web app for the xBD capstone: pick a disaster tile or upload before/after imagery, run a damage model,
+see damage on the image and on the street map, raise area alerts, review and export them, and rank the tiles of a disaster.
+
+- **Uploads:** GeoTIFF or PNG/JPEG with corner coordinates, before image uploaded or found in an archive, learned registration
+  (shift, rotation, zoom), images up to 8192 px a side processed in blocks, rename/delete.
+- **Alerts:** area alerts from severely damaged roof, analyst review (confirm / needs information / dismiss, notes), GeoJSON and CSV export,
+  situation report, facilities and roads from OpenStreetMap around each alert.
+- **Maps:** image view and street-map view with outlines on pixel edges, north-up images for rotated grids, image opacity slider.
+- **Events:** all tiles of a disaster on one map, ranked.
 
 - `api/`: FastAPI backend. Engines reuse the training code, so the app runs exactly the evaluated models
   (parity tests in `tests/`).
