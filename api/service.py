@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 import cv2
 import numpy as np
 
-from . import zones
+from . import gates, provenance, zones
 from .engines import LABEL_IDS, REVIEW_CONFIDENCE, ROOT, XBD, class_name, discover_models, load_engine
 from .scenes import CACHE, pixel_size_m, scene  # noqa: F401  (CACHE is also used by main)
 
@@ -148,6 +148,19 @@ def area_record(key: str, scene_info: dict, model_id: str, eng, loc, dmg, dmg_pr
                                      "centroid_px": [round(v, 2) for v in s["centroid_px"]],
                                      "centroid_lnglat": s["centroid_lonlat"], "area_m2": round(s["area_m2"], 1),
                                      "localized_fraction": None, "invalid_polygon": False}})
+    from . import engines as _eng
+    run_dir = ROOT / "runs" / eng.info["run"]
+    if scene_info.get("source") == "upload":
+        from .uploads import folder
+        d = folder(key)
+        inputs = {"after": d / "post.jpg", "before": d / "pre.jpg"}
+    else:
+        inputs = {"after": XBD / scene_info["split"] / "images" / f"{key}_post_disaster.png",
+                  "before": XBD / scene_info["split"] / "images" / f"{key}_pre_disaster.png"}
+    thresholds = {"alert_rule": al.RULE, "review_confidence": REVIEW_CONFIDENCE, "min_localized": _eng.MIN_LOCALIZED,
+                  "min_severe_m2": al.MIN_SEVERE_M2, "eps_m": al.EPS_M, "min_area_px": al.MIN_AREA_PX, "majority": al.MAJORITY}
+    extra = {"provenance": provenance.build(inputs, run_dir, thresholds),
+             "gates": gates.evaluate(scene_info, model_id, _eng.approved_default(models())), **(extra or {})}
     record = {"id": aid, "kind": "area", "pair_id": key,
               "created_utc": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"), "scene": scene_info,
               "model": {"id": model_id, "label": models()[model_id]["label"], "kind": eng.kind, "mode": mode, **eng.info},

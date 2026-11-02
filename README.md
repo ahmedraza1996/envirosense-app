@@ -9,6 +9,7 @@ see damage on the image and on the street map, raise area alerts, review and exp
   situation report, facilities and roads from OpenStreetMap around each alert.
 - **Maps:** image view and street-map view with outlines on pixel edges, north-up images for rotated grids, image opacity slider.
 - **Events:** all tiles of a disaster on one map, ranked.
+- **Governance:** `governance/` documents (intended use, risk register, control matrix, decision log, datasheet, model cards); approved default model; hash-chained audit log; named reviewers with history, reasons and retraction; provenance and quality flags on every new assessment.
 
 - `api/`: FastAPI backend. Engines reuse the training code, so the app runs exactly the evaluated models
   (parity tests in `tests/`).

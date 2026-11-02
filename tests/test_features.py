@@ -128,13 +128,13 @@ def stored(tmp_path, monkeypatch):
 def test_review_lifecycle_and_export(stored):
     c, aid = TestClient(app), stored["id"]
     assert c.get(f"/api/assessments/{aid}/reviews").json()["counts"]["pending"] == 3
-    r = c.put(f"/api/assessments/{aid}/alerts/AL-00000001/review", json={"status": "confirmed", "note": "checked with the fire brigade"})
+    r = c.put(f"/api/assessments/{aid}/alerts/AL-00000001/review", json={"reviewer": "A. Analyst", "status": "confirmed", "note": "checked with the fire brigade"})
     assert r.status_code == 200 and r.json()["counts"]["confirmed"] == 1
-    c.put(f"/api/assessments/{aid}/alerts/AL-00000002/review", json={"status": "dismissed", "note": "parking lot"})
-    assert c.put(f"/api/assessments/{aid}/alerts/AL-00000003/review", json={"status": "bogus"}).status_code == 400
-    assert c.put(f"/api/assessments/{aid}/alerts/AL-99999999/review", json={"status": "confirmed"}).status_code == 404
+    c.put(f"/api/assessments/{aid}/alerts/AL-00000002/review", json={"reviewer": "A. Analyst", "status": "dismissed", "note": "parking lot"})
+    assert c.put(f"/api/assessments/{aid}/alerts/AL-00000003/review", json={"reviewer": "A. Analyst", "status": "bogus"}).status_code == 400
+    assert c.put(f"/api/assessments/{aid}/alerts/AL-99999999/review", json={"reviewer": "A. Analyst", "status": "confirmed"}).status_code == 404
     got = c.get(f"/api/assessments/{aid}/reviews").json()
-    assert got["alerts"]["AL-00000001"]["note"].startswith("checked") and got["counts"] == {"pending": 1, "confirmed": 1, "dismissed": 1, "needs_info": 0}
+    assert got["alerts"]["AL-00000001"]["note"].startswith("checked") and got["counts"] == {"pending": 1, "confirmed": 1, "dismissed": 1, "needs_info": 0, "retracted": 0}
     gj = c.get(f"/api/assessments/{aid}/export.geojson").json()          # dismissed left out by default
     assert [f["id"] for f in gj["features"]] == ["AL-00000001", "AL-00000003"]
     assert gj["features"][0]["properties"]["review_status"] == "confirmed" and gj["features"][0]["geometry"]["type"] == "Polygon"
@@ -147,14 +147,14 @@ def test_review_lifecycle_and_export(stored):
     st = c.get(f"/api/assessments/{aid}/export.geojson?layer=structures").json()
     assert st["features"][0]["geometry"]["coordinates"][0][1] == [10.0001, 50.0]           # x = 10 px -> lon
     # reset to untouched
-    c.put(f"/api/assessments/{aid}/alerts/AL-00000001/review", json={"status": "pending"})
+    c.put(f"/api/assessments/{aid}/alerts/AL-00000001/review", json={"reviewer": "A. Analyst", "status": "pending"})
     assert c.get(f"/api/assessments/{aid}/reviews").json()["counts"]["pending"] == 2
 
 
 def test_report_follows_the_review(stored):
     c, aid = TestClient(app), stored["id"]
-    c.put(f"/api/assessments/{aid}/alerts/AL-00000002/review", json={"status": "dismissed", "note": "parking lot"})
-    c.put(f"/api/assessments/{aid}/alerts/AL-00000001/review", json={"status": "confirmed", "note": "verified"})
+    c.put(f"/api/assessments/{aid}/alerts/AL-00000002/review", json={"reviewer": "A. Analyst", "status": "dismissed", "note": "parking lot"})
+    c.put(f"/api/assessments/{aid}/alerts/AL-00000001/review", json={"reviewer": "A. Analyst", "status": "confirmed", "note": "verified"})
     md = c.get(f"/api/assessments/{aid}/report.md").text
     assert "AL-00000002" not in md and "AL-00000001" in md and "Confirmed" in md and "verified" in md and "1 dismissed" in md
     assert "| 3 | AL-00000003" in md                         # numbers are the app's numbers, not renumbered

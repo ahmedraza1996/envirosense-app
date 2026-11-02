@@ -7,12 +7,12 @@ import re
 import shutil
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import context, engines, events, geocal, geoimage, report, reviews, service, uploads
+from . import audit, context, engines, events, geocal, geoimage, report, reviews, service, uploads
 from .scenes import catalogue, image_jpeg, scene
 
 app = FastAPI(title="EnviroSense damage assessment", version="0.1")
@@ -165,13 +165,14 @@ def edit_upload(uid: str, body: UploadEdit):
 
 
 @app.delete("/api/uploads/{uid}")
-def delete_upload(uid: str):
+def delete_upload(uid: str, x_reviewer: str | None = Header(None)):
     try:
         uploads.delete(uid)
     except KeyError:
         raise HTTPException(404, f"no upload {uid}")
     except uploads.imagery.ImageryError as e:
         raise HTTPException(409, str(e))
+    audit.log("delete_upload", x_reviewer, uid)
     return {"deleted": uid}
 
 
@@ -187,6 +188,7 @@ def area_record_or_404(aid):
 class ReviewBody(BaseModel):
     status: str
     note: str = ""
+    reviewer: str = ""
 
 
 @app.get("/api/assessments/{aid}/reviews")
@@ -200,11 +202,13 @@ def get_reviews(aid: str):
 def put_review(aid: str, alert_id: str, body: ReviewBody):
     rec = area_record_or_404(aid)
     try:
-        e = reviews.set_review(aid, rec, alert_id, body.status, body.note)
+        e = reviews.set_review(aid, rec, alert_id, body.status, body.note, body.reviewer)
     except KeyError:
         raise HTTPException(404, f"no alert {alert_id} in {aid}")
     except reviews.ReviewError as err:
         raise HTTPException(400, str(err))
+    audit.log("review", body.reviewer, aid, alert_id=alert_id, status=body.status, note=body.note, model=rec["model"].get("id"),
+              checkpoint_sha256=(rec.get("provenance") or {}).get("checkpoint", {}).get("sha256"))
     return {"alert_id": alert_id, **e, "counts": reviews.counts(rec, reviews.load(aid))}
 
 
@@ -218,7 +222,7 @@ def _cached_context(aid):
 
 
 @app.get("/api/assessments/{aid}/export.geojson")
-def export_geojson(aid: str, layer: str = "alerts", include: str | None = None):
+def export_geojson(aid: str, layer: str = "alerts", include: str | None = None, by: str | None = None):
     """Alerts (default) or detected structures as GeoJSON (EPSG:4326). include = comma-separated review statuses;
     dismissed alerts are left out unless listed."""
     rec = area_record_or_404(aid)
@@ -229,17 +233,19 @@ def export_geojson(aid: str, layer: str = "alerts", include: str | None = None):
                 else reviews.structures_geojson(rec))
     except reviews.ReviewError as e:
         raise HTTPException(400, str(e))
+    audit.log("export", by, aid, kind=f"{layer}.geojson", include=include)
     return JSONResponse(data, media_type="application/geo+json",
                         headers={"Content-Disposition": f'attachment; filename="{layer}_{aid}.geojson"'})
 
 
 @app.get("/api/assessments/{aid}/export.csv", response_class=PlainTextResponse)
-def export_csv(aid: str, include: str | None = None):
+def export_csv(aid: str, include: str | None = None, by: str | None = None):
     rec = area_record_or_404(aid)
     try:
         text = reviews.alerts_csv(rec, reviews.load(aid), _include(include), _cached_context(aid))
     except reviews.ReviewError as e:
         raise HTTPException(400, str(e))
+    audit.log("export", by, aid, kind="alerts.csv", include=include)
     return PlainTextResponse(text, media_type="text/csv", headers={"Content-Disposition": f'attachment; filename="alerts_{aid}.csv"'})
 
 
@@ -249,6 +255,18 @@ def get_context(aid: str, refresh: bool = False):
     rec = area_record_or_404(aid)
     res = context.for_assessment(aid, rec, refresh)
     return {k: v for k, v in res.items() if not k.startswith("_")}
+
+
+# ---- audit ------------------------------------------------------------------------------------------------------
+
+@app.get("/api/audit")
+def get_audit(assessment: str | None = None, limit: int = 200):
+    return audit.read(assessment, min(max(limit, 1), 1000))
+
+
+@app.get("/api/audit/verify")
+def verify_audit():
+    return audit.verify()
 
 
 # ---- map offset ------------------------------------------------------------------------------------------------
@@ -266,7 +284,7 @@ def get_geo_offset(aid: str):
 
 
 @app.put("/api/assessments/{aid}/geo-offset")
-def put_geo_offset(aid: str, body: GeoOffset):
+def put_geo_offset(aid: str, body: GeoOffset, x_reviewer: str | None = Header(None)):
     """Move image, outlines and alerts of an assessment on the street map (east / north in metres from the file's own georeference)."""
     path = stored(aid)
     rec = json.loads(path.read_text())
@@ -278,6 +296,7 @@ def put_geo_offset(aid: str, body: GeoOffset):
         raise HTTPException(400, str(e))
     path.write_text(json.dumps(rec))
     context.invalidate(aid)
+    audit.log("map_offset", x_reviewer, aid, east_m=body.east_m, north_m=body.north_m, method=body.method, note=body.note)
     return entry
 
 
@@ -346,7 +365,7 @@ def run_assessment(req: AssessRequest):
 
 
 @app.post("/api/assess-area")
-def run_area_assessment(req: AssessRequest):
+def run_area_assessment(req: AssessRequest, x_reviewer: str | None = Header(None)):
     """Footprint-free mode: structures detected from the image, one alert per cluster of severe damage."""
     known_scene(req.pair_id)
     if req.model_id not in service.models():
@@ -354,6 +373,8 @@ def run_area_assessment(req: AssessRequest):
     if service.models()[req.model_id]["kind"] != "unet":
         raise HTTPException(400, "area alerts need a full-image U-Net model")
     rec = service.assess_area(req.pair_id, req.model_id, req.force)
+    audit.log("assess", x_reviewer, rec["id"], pair_id=req.pair_id, model=req.model_id, forced=req.force,
+              checkpoint_sha256=(rec.get("provenance") or {}).get("checkpoint", {}).get("sha256"))
     return {"id": rec["id"], "pair_id": rec["pair_id"], "model": rec["model"], "alerts": len(rec["alerts"]),
             "summary": rec["summary"], "created_utc": rec["created_utc"]}
 

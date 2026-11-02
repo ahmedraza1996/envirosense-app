@@ -93,7 +93,7 @@ def visible_alerts(aid: str, a: dict) -> list:
     the map figure and the app agree."""
     r = reviews.load(aid)
     return [(i, x, reviews.entry(r, x["alert_id"])) for i, x in enumerate(a.get("alerts", []), 1)
-            if reviews.entry(r, x["alert_id"])["status"] != "dismissed"]
+            if reviews.entry(r, x["alert_id"])["status"] not in ("dismissed", "retracted")]
 
 
 def osm_context(aid: str) -> dict:
@@ -182,6 +182,7 @@ def area_markdown(aid: str, f: dict) -> str:
           ("- Facility and road context is from OpenStreetMap and may be incomplete; the report has no information on "
            "casualties or population." if ctx else
            "- The report has no information on road access, casualties or population.")]
+    L += governance_lines(a)
     if b:
         L.append(f"- Benchmark check (xBD tile, not used for the alerts): {b['xbd_found']} of {b['xbd_buildings']} xBD "
                  f"buildings found ({b['recall']:.0%}); {b['precision']:.0%} of detections are on buildings.")
@@ -383,3 +384,26 @@ hr {{ border:0; border-top:1px solid var(--line); margin:24px 0 10px; }}
 </style></head><body>
 <div class="bar"><a href="/api/assessments/{aid}/report.md" download>Download Markdown</a><button onclick="window.print()">Print or save as PDF</button></div>
 <article class="page">{''.join(body)}</article></body></html>"""
+
+
+def governance_lines(a: dict) -> list:
+    """Lines for "Method and limits": traceability, quality flags, position, intended use (governance controls E2, P1, P3)."""
+    prov = a.get("provenance") or {}
+    out = []
+    ck = (prov.get("checkpoint") or {}).get("sha256")
+    ins = prov.get("inputs") or {}
+    if ck:
+        h = lambda k: ((ins.get(k) or {}).get("sha256") or "")[:12] or "not recorded"
+        out.append(f"- Traceability: checkpoint SHA-256 {ck[:12]}, after image {h('after')}, before image {h('before')}. "
+                   "Thresholds and software versions are stored with the assessment.")
+    else:
+        out.append("- Traceability: this assessment was made before provenance was recorded; re-run it to record the checkpoint and input hashes.")
+    warn = [g["message"] for g in a.get("gates") or [] if g["level"] == "warn"]
+    for msg in warn:
+        out.append(f"- Quality flag: {msg}")
+    off = (a.get("scene") or {}).get("geo_offset_m") or {}
+    out.append(f"- Position on the street map: moved {off['east']:+.1f} m east, {off['north']:+.1f} m north ({off['method']})." if off.get("method")
+               else "- Position on the street map is as given by the image's georeference; it was not checked against the street map.")
+    out.append("- DRAFT for analyst review. Visible damage only; verify in the field. Not for dispatch, safety or routing decisions "
+               "(intended use and excluded uses: governance/intended_use.md).")
+    return out

@@ -165,3 +165,19 @@ xBD tiles carry an approximate geotransform. On Hurricane Harvey tile 5 the Open
 - Endpoints: `GET/PUT /api/assessments/{aid}/geo-offset`, `POST .../geo-offset/measure` (slow: Overpass).
 - Map view: **Align** menu (arrows with 1, 5 or 20 m steps, Measure from OpenStreetMap, Apply, Reset).
 - Not automatic: the offset differs per image, so a measured suggestion needs a look by eye; the Events view still places tile frames with the file's own georeference.
+
+## A11 Governance foundation and first controls (2026-11-02)
+
+Documents (`governance/`): intended use and excluded uses, risk register (15 risks), roles, control matrix (34 controls, status per control), decision log, datasheet (xBD), model cards (E14, E15), approved default model.
+
+Software controls:
+- **Approved default model** (`governance/approved_model.json`, `engines.approved_default`): the default model for area alerts and uploads is no longer the best test score; it is the approved one (pinned to E14 until the switch to E15 is decided and logged). `/api/models` flags it.
+- **Audit log** (`api/audit.py`): append-only JSON lines with a hash chain (`runs/app/audit/audit.jsonl`); entries for assessments, reviews and retractions, map offset changes, exports, upload deletion. `GET /api/audit`, `GET /api/audit/verify`. The interface sends the reviewer name in the `X-Reviewer` header.
+- **Reviews** (`api/reviews.py`): a reviewer name is required; a reason is required to dismiss or retract; every decision is kept in a history; a confirmed alert can be retracted (hidden from the map, exports and report like a dismissed one).
+- **Provenance** (`api/provenance.py`): each new assessment stores SHA-256 of the input images and of the checkpoint, thresholds, software versions.
+- **Gates** (`api/gates.py`): quality flags stored with the assessment and shown in the alert panel (before-image coverage, shift-only registration, unmeasured alignment, residual, coarse imagery, position as filed or adjusted, model not the approved default).
+- **Exports and report**: GeoJSON and CSV carry a draft notice, the flags, the checkpoint hash and the position offset; the report's "Method and limits" lists traceability, flags, position status and the intended-use line.
+- Assessments made before this change have no provenance; the report says so. Re-run them to record it.
+
+Evaluation script: `scripts/eval_registration_effect.py` (E15c). Registration can run on a GPU for evaluation (`REGISTRATION_DEVICE`); the app stays on the CPU.
+Tests: 42 pass (7 new in `tests/test_governance.py`, which also covers the approved default); the suite never writes to the real audit log (`tests/conftest.py`).

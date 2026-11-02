@@ -220,3 +220,7 @@ tr.dismissed td { color: var(--ink-3); text-decoration: line-through; }
 .align-menu .segmented { justify-self: center; }
 .align-suggestion { display: grid; gap: 6px; padding: 8px; background: var(--sunken); border-radius: var(--radius); }
 .error-text { color: #B42318; }
+
+.gates { margin-top: 8px; }
+.field-block input[type=text] { width: 100%; box-sizing: border-box; padding: 6px 8px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--surface); color: var(--ink); font: inherit; }
+.status-retracted { background: #F3E3E1; color: #8A1C14; }

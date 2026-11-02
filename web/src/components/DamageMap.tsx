@@ -76,7 +76,7 @@ function Areas({ assessment, mode, toLatLng, reviews, alertId }: { assessment: A
     const group = L.layerGroup(all.map((z, i) => {
       const id = "alert_id" in z ? (z as { alert_id: string }).alert_id : null;
       const status = id ? reviews?.alerts[id]?.status ?? "pending" : "pending";
-      if (status === "dismissed") return null;
+      if (status === "dismissed" || status === "retracted") return null;
       const sel = id !== null && id === alertId;
       return L.polygon(z.hull_px.map(([x, y]) => toLatLng(x, y)),
         { color: "#1C1B19", weight: sel ? 4 : status === "confirmed" ? 3 : 1.5, dashArray: status === "confirmed" ? undefined : "5 4",

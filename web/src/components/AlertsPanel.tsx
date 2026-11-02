@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Alert, AlertContext, api, Assessment, BeforeInfo, CLASS_COLOUR, CLASS_LABEL, CLASSES, Context, pct, REVIEW_LABEL, ReviewEntry, Reviews, ReviewStatus, tileNo, titleCase } from "../api";
+import { Alert, AlertContext, api, Assessment, BeforeInfo, CLASS_COLOUR, CLASS_LABEL, CLASSES, Context, pct, REVIEW_LABEL, reviewerName, setReviewerName, ReviewEntry, Reviews, ReviewStatus, tileNo, titleCase } from "../api";
 
 interface Props {
   assessment: Assessment | null; loading: boolean; onAlert: (a: Alert) => void;
@@ -70,12 +70,16 @@ function ReviewCard({ alert, index, entry, context, onReview }: {
   onReview: (alertId: string, status: ReviewStatus, note: string) => Promise<void>;
 }) {
   const [note, setNote] = useState(entry.note);
+  const [who, setWho] = useState(reviewerName());
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   useEffect(() => { setNote(entry.note); setErr(null); }, [alert.alert_id, entry.note]);
   const save = async (status: ReviewStatus) => {
-    setBusy(true);
     setErr(null);
+    if (!who.trim()) { setErr("Enter your name first: every decision is recorded with it."); return; }
+    if ((status === "dismissed" || status === "retracted") && !note.trim()) { setErr(`A reason is required to ${status === "dismissed" ? "dismiss" : "retract"} an alert.`); return; }
+    setReviewerName(who.trim());
+    setBusy(true);
     try { await onReview(alert.alert_id, status, note); } catch (e) { setErr(String(e)); } finally { setBusy(false); }
   };
   const c = context?.available ? context.alerts[alert.alert_id] : undefined;
@@ -95,16 +99,26 @@ function ReviewCard({ alert, index, entry, context, onReview }: {
       {context?.available === null && <p className="meta">Looking up nearby facilities…</p>}
       {context?.available === false && <p className="meta" title={context.error}>Nearby facilities unavailable (OpenStreetMap not reachable).</p>}
       <label className="field-block">
-        <span>Note</span>
-        <textarea value={note} maxLength={500} rows={2} placeholder="Optional: what you checked, who was told" onChange={(e) => setNote(e.target.value)} />
+        <span>Your name</span>
+        <input type="text" value={who} maxLength={60} placeholder="Recorded with every decision" onChange={(e) => setWho(e.target.value)} />
+      </label>
+      <label className="field-block">
+        <span>Note (required to dismiss or retract)</span>
+        <textarea value={note} maxLength={500} rows={2} placeholder="What you checked, who was told, why" onChange={(e) => setNote(e.target.value)} />
       </label>
       <div className="btn-row">
         <button className="button primary" disabled={busy} onClick={() => save("confirmed")}>Confirm</button>
         <button className="button" disabled={busy} onClick={() => save("needs_info")}>Needs information</button>
         <button className="button" disabled={busy} onClick={() => save("dismissed")}>Dismiss</button>
+        {entry.status === "confirmed" && <button className="button" disabled={busy} onClick={() => save("retracted")}>Retract</button>}
         {entry.status !== "pending" && <button className="link" disabled={busy} onClick={() => { setNote(""); void save("pending"); }}>Reset</button>}
       </div>
-      {entry.reviewed_utc && <p className="meta">{REVIEW_LABEL[entry.status]} {entry.reviewed_utc} UTC</p>}
+      {entry.reviewed_utc && <p className="meta">{REVIEW_LABEL[entry.status]} by {entry.reviewed_by} {entry.reviewed_utc} UTC</p>}
+      {(entry.history?.length ?? 0) > 1 && (
+        <details className="meta"><summary>History ({entry.history!.length})</summary>
+          <ul>{entry.history!.map((h, i) => <li key={i}>{h.utc} UTC, {h.by}: {REVIEW_LABEL[h.status]}{h.note ? `, ${h.note}` : ""}</li>)}</ul>
+        </details>
+      )}
       {err && <p className="meta error-text">{err}</p>}
     </div>
   );
@@ -112,7 +126,7 @@ function ReviewCard({ alert, index, entry, context, onReview }: {
 
 function ExportBar({ aid, hasDismissed }: { aid: string; hasDismissed: boolean }) {
   const [withDismissed, setWithDismissed] = useState(false);
-  const include = withDismissed ? "pending,confirmed,needs_info,dismissed" : undefined;
+  const include = withDismissed ? "pending,confirmed,needs_info,dismissed,retracted" : undefined;
   return (
     <div className="export-bar">
       <span className="subtle">Export alerts</span>
@@ -132,7 +146,7 @@ export default function AlertsPanel({ assessment: a, loading, onAlert, alertId, 
   const entryOf = (id: string): ReviewEntry => reviews?.alerts[id] ?? { status: "pending", note: "", reviewed_by: null, reviewed_utc: null };
   const counts = reviews?.counts;
   const selIndex = alerts.findIndex((x) => x.alert_id === alertId);
-  const live = alerts.filter((x) => entryOf(x.alert_id).status !== "dismissed");
+  const live = alerts.filter((x) => !["dismissed", "retracted"].includes(entryOf(x.alert_id).status));
   const high = live.filter((x) => x.severity === "high").length;
   const p = a.summary.predicted;
   const b = a.benchmark && Object.keys(a.benchmark).length ? a.benchmark : null;
@@ -158,7 +172,7 @@ export default function AlertsPanel({ assessment: a, loading, onAlert, alertId, 
             <thead><tr><th>#</th><th>Severity</th><th>Review</th><th className="num">Severe roof</th><th className="num">Share</th></tr></thead>
             <tbody>
               {alerts.map((x, i) => (
-                <tr key={x.alert_id} className={`clickable ${x.alert_id === alertId ? "selected" : ""} ${entryOf(x.alert_id).status === "dismissed" ? "dismissed" : ""}`}
+                <tr key={x.alert_id} className={`clickable ${x.alert_id === alertId ? "selected" : ""} ${["dismissed", "retracted"].includes(entryOf(x.alert_id).status) ? "dismissed" : ""}`}
                   onClick={() => onAlert(x)} title={`${x.alert_id} · ${latlon(x.centroid_lat, x.centroid_lon)}`}>
                   <td>{i + 1}</td>
                   <td><span className={`sev sev-${x.severity}`}>{x.severity === "high" ? "High" : "Medium"}</span></td>
@@ -176,7 +190,12 @@ export default function AlertsPanel({ assessment: a, loading, onAlert, alertId, 
           of the building area there is severely damaged. Click a row to zoom and review it; alerts stay drafts until confirmed.
           {counts && alerts.length > 0 && <> Review: {counts.confirmed} confirmed, {counts.needs_info} need information, {counts.pending} draft, {counts.dismissed} dismissed.</>}
         </p>
-        {alerts.length > 0 && <ExportBar aid={a.id} hasDismissed={(counts?.dismissed ?? 0) > 0} />}
+        {alerts.length > 0 && <ExportBar aid={a.id} hasDismissed={((counts?.dismissed ?? 0) + (counts?.retracted ?? 0)) > 0} />}
+        {(a.gates ?? []).some((g) => g.level === "warn") && (
+          <ul className="context gates">{(a.gates ?? []).filter((g) => g.level === "warn").map((g) => <li key={g.code} className="flag">{g.message}</li>)}</ul>
+        )}
+        {(a.gates ?? []).filter((g) => g.level === "info" && g.code !== "DRAFT_ONLY").map((g) => <p key={g.code} className="meta">{g.message}</p>)}
+        {a.gates && <p className="meta">Draft for analyst review: visible damage only, verify in the field. Not for dispatch or safety decisions.</p>}
       </section>
 
       {upload && <BeforeImage a={a} />}

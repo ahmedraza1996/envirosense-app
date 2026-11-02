@@ -52,11 +52,18 @@ export interface Upload {
   status: { state: "queued" | "running" | "done" | "failed"; step?: string; error?: string; assessment_id?: string; alerts?: number };
 }
 
-export type ReviewStatus = "pending" | "confirmed" | "dismissed" | "needs_info";
+export type ReviewStatus = "pending" | "confirmed" | "dismissed" | "needs_info" | "retracted";
 export const REVIEW_LABEL: Record<ReviewStatus, string> = {
-  pending: "Draft", confirmed: "Confirmed", dismissed: "Dismissed", needs_info: "Needs information",
+  pending: "Draft", confirmed: "Confirmed", dismissed: "Dismissed", needs_info: "Needs information", retracted: "Retracted",
 };
-export interface ReviewEntry { status: ReviewStatus; note: string; reviewed_by: string | null; reviewed_utc: string | null }
+export interface ReviewHistoryItem { status: ReviewStatus; note: string; by: string; utc: string }
+export interface ReviewEntry { status: ReviewStatus; note: string; reviewed_by: string | null; reviewed_utc: string | null; history?: ReviewHistoryItem[] }
+export interface Gate { code: string; level: "info" | "warn"; message: string }
+
+/** Name of the person using the tool: stored in the browser, sent with every decision and recorded in the audit log. */
+export const reviewerName = () => { try { return localStorage.getItem("reviewer") ?? ""; } catch { return ""; } };
+export const setReviewerName = (n: string) => { try { localStorage.setItem("reviewer", n); } catch { /* no storage */ } };
+const actor = () => ({ "X-Reviewer": reviewerName() });
 export interface Reviews { alerts: Record<string, ReviewEntry>; counts: Record<ReviewStatus, number> }
 
 export interface AlertContext {
@@ -130,7 +137,7 @@ export interface Assessment {
   review_confidence_threshold: number; summary: Summary; zones: Zone[];
   isolated_severe: { building_id: string; predicted_class: DamageClass; centroid_px: [number, number]; centroid_lat: number; centroid_lon: number }[];
   scene_metrics: { xview2?: { score: number; loc_f1: number; dmg_f1: number } };
-  has_damage_map: boolean; features: Feature[];
+  has_damage_map: boolean; features: Feature[]; gates?: Gate[];
 }
 
 async function json<T>(r: Response): Promise<T> {
@@ -149,34 +156,34 @@ export const api = {
   scenes: (split = "hold") => fetch(`/api/scenes?split=${split}`).then(json<{ disasters: string[]; scenes: Scene[] }>),
   assess: async (pair_id: string, model_id: string): Promise<Assessment> => {
     const r = await fetch("/api/assess", {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ pair_id, model_id }),
+      method: "POST", headers: { "Content-Type": "application/json", ...actor() }, body: JSON.stringify({ pair_id, model_id }),
     }).then(json<{ id: string }>);
     return fetch(`/api/assessments/${r.id}`).then(json<Assessment>);
   },
   assessArea: async (pair_id: string, model_id: string): Promise<Assessment> => {
     const r = await fetch("/api/assess-area", {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ pair_id, model_id }),
+      method: "POST", headers: { "Content-Type": "application/json", ...actor() }, body: JSON.stringify({ pair_id, model_id }),
     }).then(json<{ id: string }>);
     return fetch(`/api/assessments/${r.id}`).then(json<Assessment>);
   },
   setGeoOffset: (aid: string, east_m: number, north_m: number, method: string, note?: string) =>
-    fetch(`/api/assessments/${aid}/geo-offset`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ east_m, north_m, method, note }) }).then(json<GeoOffset>),
+    fetch(`/api/assessments/${aid}/geo-offset`, { method: "PUT", headers: { "Content-Type": "application/json", ...actor() }, body: JSON.stringify({ east_m, north_m, method, note }) }).then(json<GeoOffset>),
   measureGeoOffset: (aid: string) => fetch(`/api/assessments/${aid}/geo-offset/measure`, { method: "POST" }).then(json<GeoSuggestion>),
   assessment: (aid: string) => fetch(`/api/assessments/${aid}`).then(json<Assessment>),
   uploads: () => fetch("/api/uploads").then(json<Upload[]>),
-  upload: (form: FormData) => fetch("/api/uploads", { method: "POST", body: form }).then(json<Upload>),
+  upload: (form: FormData) => fetch("/api/uploads", { method: "POST", headers: actor(), body: form }).then(json<Upload>),
   reviews: (aid: string) => fetch(`/api/assessments/${aid}/reviews`).then(json<Reviews>),
   review: (aid: string, alertId: string, status: ReviewStatus, note: string) =>
     fetch(`/api/assessments/${aid}/alerts/${alertId}/review`, {
-      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status, note }),
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status, note, reviewer: reviewerName() }),
     }).then(json<ReviewEntry & { counts: Record<ReviewStatus, number> }>),
   context: (aid: string) => fetch(`/api/assessments/${aid}/context`).then(json<Context>),
   exportUrl: (aid: string, kind: "alerts.geojson" | "structures.geojson" | "csv", include?: string) =>
-    kind === "csv" ? `/api/assessments/${aid}/export.csv${include ? `?include=${include}` : ""}`
-      : `/api/assessments/${aid}/export.geojson?layer=${kind.split(".")[0]}${include ? `&include=${include}` : ""}`,
+    kind === "csv" ? `/api/assessments/${aid}/export.csv?by=${encodeURIComponent(reviewerName())}${include ? `&include=${include}` : ""}`
+      : `/api/assessments/${aid}/export.geojson?layer=${kind.split(".")[0]}&by=${encodeURIComponent(reviewerName())}${include ? `&include=${include}` : ""}`,
   editUpload: (id: string, patch: { name?: string; disaster_type?: string; event_date?: string }) =>
-    fetch(`/api/uploads/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch) }).then(json<Upload>),
-  deleteUpload: (id: string) => fetch(`/api/uploads/${id}`, { method: "DELETE" }).then(json<{ deleted: string }>),
+    fetch(`/api/uploads/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json", ...actor() }, body: JSON.stringify(patch) }).then(json<Upload>),
+  deleteUpload: (id: string) => fetch(`/api/uploads/${id}`, { method: "DELETE", headers: actor() }).then(json<{ deleted: string }>),
   events: (model: string) => fetch(`/api/events?model_id=${model}`).then(json<EventSummary[]>),
   event: (disaster: string, model: string) => fetch(`/api/events/${disaster}?model_id=${model}`).then(json<EventDetail>),
   assessEvent: (disaster: string, model_id: string, limit: number) =>

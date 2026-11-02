@@ -22,23 +22,23 @@ OECD AI Principles; OCHA Data Responsibility Guidelines. Work packages (WP) are 
 | V2 | Validation | Event-grouped evaluation, per-event reporting | partial (crop classifiers only) | E05; WP-M4 | MEASURE; Art. 15 |
 | V3 | Validation | Robustness tests (shift, rotation, zoom) | in place | E14b, E15 robustness, E15c | MEASURE; Art. 15 |
 | V4 | Validation | Calibration, ECE, coverage-risk curve | planned (WP-M5) | `src/metrics.py` has `ece` | MEASURE; Art. 15 |
-| P1 | Prediction | Provenance record per assessment (model, checkpoint, code version, registration, thresholds) | partial (model, checkpoint, commit, registration QA stored) | assessment JSON | MANAGE; Art. 12 |
-| P2 | Prediction | Provenance adds image and checkpoint hashes, offset and thresholds | planned (WP-G2) | `api/provenance.py` (to build) | Art. 12 |
-| P3 | Prediction | Input gates (failed registration, low coverage, unmeasured offset, low confidence) with visible flags | planned (WP-G2) | `api/gates.py` (to build); tests | MEASURE, MANAGE; Art. 15 |
+| P1 | Prediction | Provenance record per assessment (model, checkpoint, code version, registration, thresholds) | in place | assessment JSON: `model`, `provenance` | MANAGE; Art. 12 |
+| P2 | Prediction | Provenance adds image and checkpoint hashes, offset and thresholds | in place (assessments made from 2 Nov 2026; older records lack hashes) | `api/provenance.py`; `tests/test_governance.py` | Art. 12 |
+| P3 | Prediction | Input gates (failed registration, low coverage, unmeasured offset, low confidence) with visible flags | partial (flags shown; abstention planned, WP-M5) | `api/gates.py`; `tests/test_governance.py` | MEASURE, MANAGE; Art. 15 |
 | P4 | Prediction | Approved default model; no silent model change | in place | `governance/approved_model.json`; `tests/test_governance.py` | MANAGE; ISO 42001 change control |
 | A1 | Alerts | Documented alert rule stored with each assessment; alerts start as drafts; no outside notification | in place | assessment JSON (`alert_rule`); status text | MANAGE; Art. 13 |
 | A2 | Alerts | Thresholds tuned on validation and versioned | planned (WP-A) | config file; X10 | MEASURE |
-| A3 | Alerts | Alert carries its provenance and gate flags | planned (WP-G2) | alert schema | Art. 12, 13 |
+| A3 | Alerts | Alert carries its provenance and gate flags | partial (gates and checkpoint hash in every alert export; provenance is per assessment) | `api/reviews.py` export; test | Art. 12, 13 |
 | H1 | Review | Confirm, needs information, dismiss with note; time stamp | in place | `api/reviews.py` | GOVERN, MANAGE; Art. 14 |
-| H2 | Review | Named reviewer; append-only history; reason required on dismiss | planned (WP-G2) | `api/reviews.py` (to extend); tests | Art. 14; accountability |
+| H2 | Review | Named reviewer; append-only history; reason required on dismiss | in place | `api/reviews.py` (reviewer, history, reason); `tests/test_governance.py` | Art. 14; accountability |
 | H3 | Review | Oversight tested with seeded errors | planned (WP-G3) | assurance report | Art. 14; Green 2022 |
 | E1 | Export | Report with "Method and limits" | partial | `api/report.py` | Art. 13 |
-| E2 | Export | Draft marker, intended use, versions and offset in every export and the report footer | planned (WP-A) | export tests | Art. 13 |
+| E2 | Export | Draft marker, intended use, versions and offset in every export and the report footer | in place | `api/reviews.py`, `api/report.py`; tests | Art. 13 |
 | M1 | Monitoring | Re-evaluation on every new event or retrained model; change log | partial (experiment log, app log) | logs | MANAGE; ISO 42001 continual improvement; Art. 9 |
 | M2 | Monitoring | Input-quality summary per upload | planned | upload QA | MEASURE |
-| I1 | Incidents | Retraction of an alert; incident log; report revision | planned (WP-G2) | route, log, test | MANAGE; redressability |
+| I1 | Incidents | Retraction of an alert; incident log; report revision | partial (retraction with reason and history exists; separate incident procedure to write) | `api/reviews.py`; `tests/test_governance.py` | MANAGE; redressability |
 | I2 | Incidents | Incident drill | planned (WP-G3) | drill record | MANAGE |
-| X1 | Audit | Append-only audit log with hash chain | planned (WP-G2) | `api/audit.py`; test | Art. 12; auditability |
+| X1 | Audit | Append-only audit log with hash chain | in place | `api/audit.py`, `GET /api/audit/verify`; `tests/test_governance.py` | Art. 12; auditability |
 | X2 | Assurance | Traceability test, documentation completeness, gate tests, accountability metrics | planned (WP-G3) | `tests/test_governance.py`; assurance report | SMACTR testing; MEASURE |
 
-Count (2 Nov 2026): 34 controls; in place 11 (G1 to G3 are drafts awaiting supervisor review), draft 2, partial 5, planned 16.
+Count (2 Nov 2026): 34 controls; in place 16 (G1 to G3 are drafts awaiting supervisor review), draft 2, partial 7, planned 9.

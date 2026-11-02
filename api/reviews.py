@@ -3,7 +3,10 @@
 Every alert starts as a draft. An analyst confirms it, dismisses it, or asks for more information, optionally with a
 note. Decisions are stored per assessment (runs/app/reviews/<assessment>.json) next to, never inside, the model output,
 so re-running a model never erases them. Alert ids are derived from the tile and the alert's location, so they are
-stable for the same result. Exports carry the decision with each alert; dismissed alerts are left out unless asked for.
+stable for the same result. Exports carry the decision with each alert; dismissed and retracted alerts are left out unless asked for.
+
+Every decision is kept: an entry has the current status and a history of all earlier ones (who, when, status, note). A reviewer name is
+required, a dismissal needs a reason, and an alert that was confirmed and later found wrong is retracted (with a reason), not deleted.
 """
 import csv
 import io
@@ -14,7 +17,7 @@ from datetime import datetime, timezone
 from .engines import ROOT
 
 STORE = ROOT / "runs" / "app" / "reviews"
-STATUSES = ("pending", "confirmed", "dismissed", "needs_info")
+STATUSES = ("pending", "confirmed", "dismissed", "needs_info", "retracted")
 NOTE_MAX = 500
 _lock = threading.Lock()
 
@@ -32,23 +35,30 @@ def load(aid: str) -> dict:
     return json.loads(p.read_text()) if p.exists() else {"alerts": {}}
 
 
-def set_review(aid: str, rec: dict, alert_id: str, status: str, note: str = "", by: str = "analyst") -> dict:
+def set_review(aid: str, rec: dict, alert_id: str, status: str, note: str = "", by: str = "") -> dict:
     if status not in STATUSES:
         raise ReviewError(f"status must be one of {', '.join(STATUSES)}")
     if not any(a["alert_id"] == alert_id for a in rec.get("alerts") or []):
         raise KeyError(alert_id)
+    by = (by or "").strip()
     note = (note or "").strip()
+    if not by:
+        raise ReviewError("a reviewer name is required")
     if len(note) > NOTE_MAX:
         raise ReviewError(f"note is limited to {NOTE_MAX} characters")
+    if status in ("dismissed", "retracted") and not note:
+        raise ReviewError(f"a reason is required to {'dismiss' if status == 'dismissed' else 'retract'} an alert")
     with _lock:
         data = load(aid)
-        if status == "pending" and not note:
-            data["alerts"].pop(alert_id, None)           # back to untouched
-            entry = {"status": "pending", "note": "", "reviewed_by": None, "reviewed_utc": None}
-        else:
-            entry = {"status": status, "note": note, "reviewed_by": by,
-                     "reviewed_utc": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")}
-            data["alerts"][alert_id] = entry
+        old = data["alerts"].get(alert_id) or {}
+        if status == "retracted" and old.get("status") != "confirmed":
+            raise ReviewError("only a confirmed alert can be retracted")
+        utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        history = list(old.get("history") or [])
+        history.append({"status": status, "note": note, "by": by, "utc": utc})
+        entry = {"status": status, "note": note, "reviewed_by": None if status == "pending" else by,
+                 "reviewed_utc": None if status == "pending" else utc, "history": history}
+        data["alerts"][alert_id] = entry
         STORE.mkdir(parents=True, exist_ok=True)
         tmp = _path(aid).with_suffix(".tmp")
         tmp.write_text(json.dumps(data, indent=1))
@@ -97,11 +107,17 @@ def alerts_geojson(rec: dict, reviews: dict, include=None, context: dict | None 
                           "centroid_lat": round(a["centroid_lat"], 6), "centroid_lon": round(a["centroid_lon"], 6),
                           "priority": a["priority"], "context_flags": c.get("flags", []),
                           "nearest_hospital": c.get("nearest_hospital"), "event": _title(sc),
-                          "assessment_id": rec["id"], "model": rec["model"]["label"], "assessed_utc": rec["created_utc"]}})
+                          "assessment_id": rec["id"], "model": rec["model"]["label"], "assessed_utc": rec["created_utc"],
+                          "checkpoint_sha256": ((rec.get("provenance") or {}).get("checkpoint") or {}).get("sha256"),
+                          "quality_flags": [g["code"] for g in rec.get("gates") or [] if g["level"] == "warn"],
+                          "position_offset_m": (sc.get("geo_offset_m") or {}).get("east") is not None and
+                          [(sc.get("geo_offset_m") or {}).get("east"), (sc.get("geo_offset_m") or {}).get("north")] or None}})
     return {"type": "FeatureCollection", "name": f"alerts_{rec['id']}",
             "properties": {"event": _title(sc), "assessment_id": rec["id"], "model": rec["model"]["label"],
                            "rule": rec.get("alert_rule"), "status_included": sorted(set(include or ("pending", "confirmed", "needs_info"))),
-                           "note": "Model output awaiting analyst review unless review_status says otherwise."},
+                           "note": "DRAFT: model output awaiting analyst review unless review_status says otherwise. Visible damage only; verify in the field. "
+                                   "Not for dispatch or safety decisions (governance/intended_use.md).",
+                           "gates": rec.get("gates") or [], "provenance": rec.get("provenance")},
             "features": feats}
 
 
@@ -116,12 +132,15 @@ def structures_geojson(rec: dict) -> dict:
         feats.append({"type": "Feature", "id": f["id"], "geometry": {"type": "Polygon", "coordinates": [[ll(x, y) for x, y in ring]]},
                       "properties": {"id": f["id"], "predicted_class": p["predicted_class"], "confidence": p["confidence"],
                                      "area_m2": p.get("area_m2"), "review_status": p["review_status"]}})
-    return {"type": "FeatureCollection", "name": f"structures_{rec['id']}", "features": feats}
+    return {"type": "FeatureCollection", "name": f"structures_{rec['id']}",
+            "properties": {"note": "DRAFT: structures detected by a model, visible damage only; verify in the field.",
+                           "gates": rec.get("gates") or [], "provenance": rec.get("provenance")}, "features": feats}
 
 
 CSV_COLUMNS = ["number", "alert_id", "severity", "review_status", "review_note", "reviewed_utc", "centroid_lat", "centroid_lon",
                "severe_roof_m2", "building_area_m2", "severe_share", "structures", "severe_structures", "area_m2", "priority",
-               "context_flags", "nearest_hospital", "nearest_hospital_m", "event", "model", "assessed_utc"]
+               "context_flags", "nearest_hospital", "nearest_hospital_m", "event", "model", "assessed_utc", "checkpoint_sha256", "quality_flags",
+               "position_offset_m"]
 
 
 def alerts_csv(rec: dict, reviews: dict, include=None, context: dict | None = None) -> str:
@@ -133,5 +152,7 @@ def alerts_csv(rec: dict, reviews: dict, include=None, context: dict | None = No
         h = p.pop("nearest_hospital") or {}
         p["nearest_hospital"], p["nearest_hospital_m"] = h.get("name") or "", h.get("distance_m", "")
         p["context_flags"] = "; ".join(p["context_flags"])
+        p["quality_flags"] = "; ".join(p.get("quality_flags") or [])
+        p["position_offset_m"] = "" if not p.get("position_offset_m") else f"{p['position_offset_m'][0]:+.1f} E, {p['position_offset_m'][1]:+.1f} N"
         w.writerow({k: p.get(k, "") for k in CSV_COLUMNS})
     return out.getvalue()

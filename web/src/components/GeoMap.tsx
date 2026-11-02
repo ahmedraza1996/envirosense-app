@@ -53,7 +53,7 @@ function Areas({ assessment, gt, mode, reviews, alertId }: { assessment: Assessm
     const group = L.layerGroup(all.map((z, i) => {
       const id = "alert_id" in z ? (z as { alert_id: string }).alert_id : null;
       const status = id ? reviews?.alerts[id]?.status ?? "pending" : "pending";
-      if (status === "dismissed") return null;
+      if (status === "dismissed" || status === "retracted") return null;
       const sev = "severity" in z ? (z as { severity: string }).severity : null;
       const c = sev === "high" ? CLASS_COLOUR.destroyed : sev === "medium" ? CLASS_COLOUR["major-damage"] : "#1C1B19";
       const sel = id !== null && id === alertId;
