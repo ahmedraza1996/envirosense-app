@@ -181,3 +181,10 @@ Software controls:
 
 Evaluation script: `scripts/eval_registration_effect.py` (E15c). Registration can run on a GPU for evaluation (`REGISTRATION_DEVICE`); the app stays on the CPU.
 Tests: 42 pass (7 new in `tests/test_governance.py`, which also covers the approved default); the suite never writes to the real audit log (`tests/conftest.py`).
+
+## A12 Calibration, evidence strength per alert, retention rule (2026-11-02)
+- `src/calibrate.py`: temperature scaling of the damage head on validation pairs of the training pool, ECE before and after, coverage-risk table; writes `runs/<run>/calibration.json`. The engine applies the temperature only when the file says `"apply": true` (ECE lowered by at least 0.005). For E14 the temperature is 1.05 and the head is already well calibrated at pixel level (ECE 0.056), so it is not applied.
+- Each area alert now carries `low_confidence_structures` and `low_confidence_share` (members below the review confidence); shown in the alert card ("weak evidence: check first" when at least half), in the GeoJSON and in the CSV.
+- Upload retention rule and notice: `governance/retention.json`, `GET /api/policy`, notice in the upload dialog; with `upload_retention_days` set, expired uploads are deleted at start-up and logged to the audit log. Default: no automatic deletion.
+- `scripts/measure_offset_study.py` (X8) runs the Align measurement on 3 tiles per event of the hold split.
+- Tests: 9 in `tests/test_governance.py`; the full suite has 44 tests. `test_uploads.py::test_plain_pair_with_its_own_before_corners` failed once when the server was running three other jobs and passed alone; it waits on the background worker.

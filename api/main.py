@@ -257,6 +257,17 @@ def get_context(aid: str, refresh: bool = False):
     return {k: v for k, v in res.items() if not k.startswith("_")}
 
 
+@app.get("/api/policy")
+def get_policy():
+    """Upload notice and retention rule shown in the upload dialog."""
+    return uploads.policy()
+
+
+@app.on_event("startup")
+def _retention():
+    uploads.purge_expired()
+
+
 # ---- audit ------------------------------------------------------------------------------------------------------
 
 @app.get("/api/audit")

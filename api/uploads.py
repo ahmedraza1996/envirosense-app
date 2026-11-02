@@ -90,6 +90,43 @@ def list_uploads() -> list:
     return sorted(out, key=lambda u: u["created_utc"], reverse=True)
 
 
+RETENTION = Path(__file__).resolve().parents[1] / "governance" / "retention.json"
+
+
+def policy() -> dict:
+    """Retention rule and upload notice (governance/retention.json). No days set: uploads are kept until the user deletes them."""
+    try:
+        return json.loads(RETENTION.read_text())
+    except (OSError, ValueError):
+        return {"upload_retention_days": None, "notice": "Uploads are kept until you delete them."}
+
+
+def expired(days: int | None, now: datetime | None = None) -> list:
+    if not days:
+        return []
+    now = now or datetime.now(timezone.utc)
+    out = []
+    for u in list_uploads():
+        made = datetime.strptime(u["created_utc"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+        if (now - made).days >= days and (u.get("status") or {}).get("state") not in ("queued", "running"):
+            out.append(u["id"] if "id" in u else u["pair_id"])
+    return out
+
+
+def purge_expired() -> list:
+    """Delete uploads past the retention period (when one is set); each deletion is written to the audit log."""
+    from . import audit
+    gone = []
+    for uid in expired(policy().get("upload_retention_days")):
+        try:
+            delete(uid)
+            audit.log("delete_upload", "system (retention rule)", uid, retention_days=policy().get("upload_retention_days"))
+            gone.append(uid)
+        except Exception:  # noqa: BLE001  a busy or half-removed upload is tried again at the next start
+            continue
+    return gone
+
+
 def create(after: Path, meta: dict, before: Path | None = None) -> str:
     """Register an upload whose files are already saved in folder(uid) and queue it."""
     uid = after.parent.name

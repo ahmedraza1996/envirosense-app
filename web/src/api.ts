@@ -123,6 +123,7 @@ export interface Alert {
   severe_area_m2: number; building_area_m2: number; severe_share: number; structures: number; severe: number;
   counts: Record<DamageClass, number>; centroid_px: [number, number]; centroid_lat: number; centroid_lon: number;
   area_m2: number; hull_px: [number, number][]; member_ids: string[];
+  low_confidence_structures?: number; low_confidence_share?: number;
 }
 
 export interface Benchmark {
@@ -170,6 +171,7 @@ export const api = {
     fetch(`/api/assessments/${aid}/geo-offset`, { method: "PUT", headers: { "Content-Type": "application/json", ...actor() }, body: JSON.stringify({ east_m, north_m, method, note }) }).then(json<GeoOffset>),
   measureGeoOffset: (aid: string) => fetch(`/api/assessments/${aid}/geo-offset/measure`, { method: "POST" }).then(json<GeoSuggestion>),
   assessment: (aid: string) => fetch(`/api/assessments/${aid}`).then(json<Assessment>),
+  policy: () => fetch("/api/policy").then(json<{ upload_retention_days: number | null; notice: string }>),
   uploads: () => fetch("/api/uploads").then(json<Upload[]>),
   upload: (form: FormData) => fetch("/api/uploads", { method: "POST", headers: actor(), body: form }).then(json<Upload>),
   reviews: (aid: string) => fetch(`/api/assessments/${aid}/reviews`).then(json<Reviews>),

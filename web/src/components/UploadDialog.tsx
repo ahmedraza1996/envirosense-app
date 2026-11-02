@@ -33,6 +33,8 @@ export default function UploadDialog({ models, onClose, onCreated }: Props) {
   const [before, setBefore] = useState<File | null>(null);
   const [name, setName] = useState("");
   const [type, setType] = useState("other");
+  const [policy, setPolicy] = useState("");
+  useEffect(() => { api.policy().then((p) => setPolicy(p.notice)).catch(() => undefined); }, []);
   const [date, setDate] = useState("");
   const [model, setModel] = useState(bestUnet(models)?.id ?? "");
   const [corners, setCorners] = useState<Corners>({});
@@ -94,6 +96,7 @@ export default function UploadDialog({ models, onClose, onCreated }: Props) {
           <h1>Upload imagery</h1>
           <p className="meta">The after image is assessed for damage. Its location is used to find a before image, which
             shows where buildings stood.</p>
+          {policy && <p className="meta note">{policy}</p>}
         </header>
 
         <div className="form-grid">

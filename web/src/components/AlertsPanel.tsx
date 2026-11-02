@@ -94,6 +94,7 @@ function ReviewCard({ alert, index, entry, context, onReview }: {
         <dt>Severely damaged roof</dt><dd>{area(alert.severe_area_m2)}</dd>
         <dt>Severe structures</dt><dd>{alert.severe} of {alert.structures}</dd>
         <dt>Location</dt><dd className="mono">{latlon(alert.centroid_lat, alert.centroid_lon)}</dd>
+        {alert.low_confidence_structures != null && <><dt>Unsure structures</dt><dd>{alert.low_confidence_structures} of {alert.structures}{alert.low_confidence_share! >= 0.5 ? " (weak evidence: check first)" : ""}</dd></>}
       </dl>
       {c && <ContextLines c={c} />}
       {context?.available === null && <p className="meta">Looking up nearby facilities…</p>}

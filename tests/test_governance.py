@@ -119,3 +119,29 @@ def test_review_endpoint_requires_a_name_and_is_audited():
     r = c.put("/api/assessments/nope/alerts/AL-1/review", json={"status": "confirmed", "reviewer": "R1"})
     assert r.status_code == 404 and _audit.read() == []
     assert c.get("/api/audit/verify").json()["ok"] is True
+
+
+def test_retention_rule_deletes_only_expired_uploads(tmp_path, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    from app.api import uploads
+    monkeypatch.setattr(uploads, "UPLOADS", tmp_path / "uploads")
+    monkeypatch.setattr(uploads, "RETENTION", tmp_path / "retention.json")
+    now = datetime.now(timezone.utc)
+    for uid, age, state in (("upl_00000001", 40, "done"), ("upl_00000002", 5, "done"), ("upl_00000003", 40, "running")):
+        d = uploads.UPLOADS / uid
+        d.mkdir(parents=True)
+        (d / "meta.json").write_text(json.dumps({"id": uid, "name": uid, "created_utc": (now - timedelta(days=age)).strftime("%Y-%m-%d %H:%M:%S")}))
+        (d / "status.json").write_text(json.dumps({"state": state}))
+    assert uploads.expired(None) == []                                                # no rule: nothing is ever deleted
+    # old uploads go; an old one marked "running" that no worker holds is an interrupted job (info() reports it as failed) and goes too
+    assert set(uploads.expired(30)) == {"upl_00000001", "upl_00000003"}
+    uploads.RETENTION.write_text(json.dumps({"upload_retention_days": 30, "notice": "n"}))
+    assert set(uploads.purge_expired()) == {"upl_00000001", "upl_00000003"}
+    assert not (uploads.UPLOADS / "upl_00000001").exists() and (uploads.UPLOADS / "upl_00000002").exists()   # the recent upload stays
+    last = audit.read()[-1]
+    assert last["action"] == "delete_upload" and last["actor"].startswith("system")
+
+
+def test_policy_endpoint_gives_the_upload_notice():
+    p = TestClient(app).get("/api/policy").json()
+    assert "kept until you delete" in p["notice"] and p["upload_retention_days"] is None

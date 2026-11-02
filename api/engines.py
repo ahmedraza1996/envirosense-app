@@ -102,6 +102,10 @@ class UNetEngine:
         self.net, self.device = net.to(device).eval(), torch.device(device)
         self.mode = {"post": "post-only", "early": "pre + post (early fusion)", "paired": "pre + post (Siamese)"}[a["mode"]]
         self.info = {**run_info(run_dir), "epoch": ck.get("epoch"), "arch": a["encoder"]}
+        cal = run_dir / "calibration.json"           # temperature scaling of the damage head (src/calibrate.py); argmax is unchanged
+        c = json.loads(cal.read_text()) if cal.exists() else {}
+        self.temperature = float(c["temperature"]) if c.get("apply") else 1.0       # applied only when it improves calibration
+        self.info["temperature"] = self.temperature
 
     @torch.no_grad()
     def predict_maps(self, split, pair_id):
@@ -110,7 +114,7 @@ class UNetEngine:
         with _LOCK:
             loc_logit, dmg_logit = self.net(pre[None].to(self.device), post[None].to(self.device))
         loc = (torch.sigmoid(loc_logit[0]) > 0.5).cpu().numpy()
-        dmg_prob = torch.softmax(dmg_logit[0], 0).cpu().numpy()          # 4 x H x W
+        dmg_prob = torch.softmax(dmg_logit[0] / self.temperature, 0).cpu().numpy()          # 4 x H x W
         dmg = (dmg_prob.argmax(0) + 1).astype(np.uint8) * loc             # 0 background, 1-4 damage
         sc = XView2Score()
         sc.add(loc, dmg, loc_t.numpy(), dmg_t.numpy())
@@ -142,7 +146,7 @@ class UNetEngine:
                     sl = (slice(None), slice(y, y + wy), slice(x, x + wx))
                     l, d = self.net(pre_t[sl][None].to(self.device), post_t[sl][None].to(self.device))
                     loc_p[y:y + wy, x:x + wx] += torch.sigmoid(l[0]).cpu().numpy()
-                    dmg_p[:, y:y + wy, x:x + wx] += torch.softmax(d[0], 0).cpu().numpy()
+                    dmg_p[:, y:y + wy, x:x + wx] += torch.softmax(d[0] / self.temperature, 0).cpu().numpy()
                     hits[y:y + wy, x:x + wx] += 1
         return loc_p[:h, :w] / hits[:h, :w], dmg_p[:, :h, :w] / hits[:h, :w]
 
@@ -167,7 +171,7 @@ class UNetEngine:
 
         def run(eng, pre_t, post_t):
             l, d = eng.net(pre_t.to(eng.device), post_t.to(eng.device))
-            return torch.sigmoid(l[0]).cpu().numpy(), torch.softmax(d[0], 0).cpu().numpy()
+            return torch.sigmoid(l[0]).cpu().numpy(), torch.softmax(d[0] / self.temperature, 0).cpu().numpy()
 
         for bi, y in enumerate(ys):
             for x in xs:
