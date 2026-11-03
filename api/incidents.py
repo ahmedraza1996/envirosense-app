@@ -1,28 +1,27 @@
 """Incident candidates from the records (control I1, governance/incident_procedure.md).
 
-Lists, from the audit log and the review store: retracted alerts, denied actions, failed sign-ins and anything unusual about the chain. It decides
+Lists, from the audit log and the review history in the database: retracted alerts, denied actions, failed sign-ins and anything unusual about the chain. It decides
 nothing; a person reads the list and writes the incident log.
 """
-from . import audit, reviews
+from ..db.engine import rows as query
+from ..db.engine import tx
+from . import audit
 
 
 def collect(limit: int = 100000) -> dict:
-    rows = audit.read(None, limit)
-    retractions = []
-    if reviews.STORE.exists():
-        for f in sorted(reviews.STORE.glob("*.json")):
-            for alert_id, e in reviews.load(f.stem).get("alerts", {}).items():
-                for h in e.get("history", []):
-                    if h["status"] == "retracted":
-                        retractions.append({"assessment": f.stem, "alert_id": alert_id, "by": h["by"], "utc": h["utc"], "reason": h["note"]})
-    denied = [r for r in rows if r["action"] == "denied"]
-    failed = [r for r in rows if r["action"] == "login_failed"]
+    entries = audit.read(None, limit)
+    with tx() as c:
+        retractions = [{"assessment": r["assessment_id"], "alert_id": r["alert_id"], "by": r["actor"], "utc": r["utc"], "reason": r["note"]}
+                       for r in query(c, "SELECT assessment_id, alert_id, actor, note, to_char(at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') AS utc "
+                                         "FROM wf.alert_review_events WHERE status = 'retracted' ORDER BY at, id")]
+    denied = [r for r in entries if r["action"] == "denied"]
+    failed = [r for r in entries if r["action"] == "login_failed"]
     by_user: dict = {}
     for r in failed:
         by_user[r["detail"].get("username") or r["actor"]] = by_user.get(r["detail"].get("username") or r["actor"], 0) + 1
     return {"chain": audit.verify(), "retractions": retractions, "denied": denied, "failed_sign_ins": failed,
             "failed_by_user": dict(sorted(by_user.items(), key=lambda kv: -kv[1])),
-            "model_approvals": [r for r in rows if r["action"] == "model_approval"]}
+            "model_approvals": [r for r in entries if r["action"] == "model_approval"]}
 
 
 def markdown(c: dict) -> str:

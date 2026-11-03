@@ -1,9 +1,8 @@
 """Routes for signing in, users, units and the approved model (controls A1-A6)."""
-import json
-
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel
 
+from ..db import semantic
 from . import audit, auth, engines, service
 
 router = APIRouter()
@@ -52,7 +51,7 @@ class ModelApproval(BaseModel):
 
 def _me() -> dict:
     u = auth.current()
-    return auth.public_user(u["username"], auth.users()[u["username"]])
+    return auth.public_user(u["username"], auth.get_user(u["username"]))
 
 
 def _managed(unit_id: str):
@@ -63,7 +62,7 @@ def _managed(unit_id: str):
 @router.post("/api/auth/login")
 def login(body: Login, request: Request, response: Response):
     try:
-        user, token = auth.login(body.username, body.password)
+        user, token = auth.login(body.username, body.password, request.client.host if request.client else None)
     except auth.AuthError as e:
         audit.log("login_failed", body.username.strip().lower() or "unknown", username=body.username.strip().lower()[:32], reason=str(e),
                   client=request.client.host if request.client else None)
@@ -75,9 +74,11 @@ def login(body: Login, request: Request, response: Response):
 
 @router.post("/api/auth/logout")
 def logout(request: Request, response: Response):
-    u = auth.user_from_token(request.cookies.get(auth.COOKIE))
+    token = request.cookies.get(auth.COOKIE) or (request.headers.get("authorization", "")[7:] or None)
+    u = auth.user_from_token(token)
     if u:
         audit.log("logout", u["username"], unit=u["unit"], role=u["role"])
+        auth.end_session(token)
     response.delete_cookie(auth.COOKIE, path="/")
     return {"ok": True}
 
@@ -113,7 +114,8 @@ def get_units():
     counts = {}
     for rec in auth.users().values():
         counts[rec["unit"]] = counts.get(rec["unit"], 0) + 1
-    return [{"id": k, **v, "path": auth.path_names(k), "users": counts.get(k, 0)} for k, v in auth.units().items() if k in vis]
+    all_units = auth.units()
+    return [{"id": k, **v, "path": auth.path_names(k, all_units), "users": counts.get(k, 0)} for k, v in all_units.items() if k in vis]
 
 
 @router.post("/api/admin/units")
@@ -144,8 +146,7 @@ def edit_unit(unit_id: str, body: UnitEdit):
 
 @router.get("/api/admin/users")
 def get_users():
-    vis = auth.visible_units(auth.current())
-    return [auth.public_user(k, v) for k, v in auth.users().items() if v["unit"] in vis]
+    return auth.list_users(auth.visible_units(auth.current()))
 
 
 @router.post("/api/admin/users")
@@ -162,7 +163,7 @@ def add_user(body: NewUser):
 
 @router.patch("/api/admin/users/{username}")
 def edit_user(username: str, body: UserEdit):
-    rec = auth.users().get(username)
+    rec = auth.get_user(username)
     if not rec:
         raise HTTPException(404, f"no user {username}")
     _managed(rec["unit"])
@@ -180,7 +181,7 @@ def edit_user(username: str, body: UserEdit):
 
 @router.post("/api/admin/users/{username}/reset-password")
 def reset_password(username: str):
-    rec = auth.users().get(username)
+    rec = auth.get_user(username)
     if not rec:
         raise HTTPException(404, f"no user {username}")
     _managed(rec["unit"])
@@ -194,27 +195,23 @@ def reset_password(username: str):
 
 @router.get("/api/approved-model")
 def approved_model():
-    try:
-        cur = json.loads(engines.APPROVED.read_text())
-    except (OSError, ValueError):
-        cur = {"default_model": None}
-    return {**cur, "available": [{"id": k, "label": m.get("label", k)} for k, m in service.models().items() if m.get("kind") == "unet"]}
+    return {**semantic.approved_model(), "available": [{"id": k, "label": m.get("label", k)} for k, m in service.models().items() if m.get("kind") == "unet"]}
 
 
 @router.put("/api/admin/approved-model")
 def approve_model(body: ModelApproval):
-    """Change the default model. Written to governance/approved_model.json and, as a new row, to governance/decision_log.md."""
+    """Change the default model: recorded in sem.model_versions (one approved row at a time), in the audit log and, as a new row, in governance/decision_log.md."""
     models = service.models()
     reason = body.reason.strip()
     if body.model_id not in models or models[body.model_id]["kind"] != "unet":
         raise HTTPException(400, "the default must be an available full-image U-Net model")
     if len(reason) < 10:
         raise HTTPException(400, "give the reason (at least 10 characters)")
-    old = approved_model().get("default_model")
+    old = semantic.approved_id()
     me = auth.current()
     day = auth.now()[:10]
-    engines.APPROVED.write_text(json.dumps({"default_model": body.model_id, "approved_utc": day, "approved_by": f"{me['username']} ({me['name']})",
-                                           "reason": reason, "previous": old}, indent=2) + "\n")
+    semantic.sync_models(models)
+    semantic.approve_model(body.model_id, f"{me['username']} ({me['name']})", reason)
     row = f"| {day} | Application default model changed from `{old}` to `{body.model_id}` | {reason.replace('|', '/')} | {me['username']} | [supervisor, pending] |\n"
     with DECISION_LOG.open("a") as f:
         f.write(row)

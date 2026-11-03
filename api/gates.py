@@ -3,7 +3,7 @@
 Each gate has a code, a level (info, warn) and a plain message. They never change a model output; they say how far to trust it.
 Stored with the assessment and shown in the alert panel, the report and the exports.
 """
-from .engines import REVIEW_CONFIDENCE
+from .engines import review_confidence
 
 
 def evaluate(scene: dict, model_id: str, approved: str | None, row: dict | None = None) -> list:
@@ -33,5 +33,5 @@ def evaluate(scene: dict, model_id: str, approved: str | None, row: dict | None 
         add("POSITION_ADJUSTED", "info", f"Position moved {off.get('east', 0):+.1f} m east, {off.get('north', 0):+.1f} m north ({off['method']}).")
     if approved is None or model_id != approved:
         add("MODEL_NOT_APPROVED_DEFAULT", "warn", f"Model {model_id} is not the approved default model.")
-    add("DRAFT_ONLY", "info", f"Model output awaiting analyst review. Structures below {int(REVIEW_CONFIDENCE * 100)}% confidence are marked for review.")
+    add("DRAFT_ONLY", "info", f"Model output awaiting analyst review. Structures below {int(review_confidence() * 100)}% confidence are marked for review.")
     return g

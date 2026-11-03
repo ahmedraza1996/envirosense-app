@@ -26,7 +26,6 @@ from models import Paired, PostOnly  # noqa: E402
 
 XBD = ROOT / "data" / "xbd"
 LABEL_IDS = {"no-damage": 0, "minor-damage": 1, "major-damage": 2, "destroyed": 3}
-REVIEW_CONFIDENCE = 0.7       # below this max class probability a building is flagged for review (E17: keeps ~59% of building pixels at 4-6% error)
 MIN_LOCALIZED = 0.2           # U-Net: share of the footprint that must be predicted as building
 _LOCK = threading.Lock()      # one inference at a time: the app never stacks jobs on the server
 
@@ -255,14 +254,18 @@ APPROVED = Path(__file__).resolve().parents[1] / "governance" / "approved_model.
 
 
 def approved_default(models: dict) -> str | None:
-    """Model id approved as the default for area alerts and uploads (governance/approved_model.json). The default is never
-    chosen silently from test scores: without an approval file, or when the approved model is missing, there is none and the
+    """Model id approved as the default for area alerts and uploads (sem.model_versions, one row has status 'approved'). The default is never
+    chosen silently from test scores: without an approval, or when the approved model cannot be loaded here, there is none and the
     interface falls back to the best test score only for display."""
-    try:
-        mid = json.loads(APPROVED.read_text()).get("default_model")
-    except (OSError, ValueError):
-        return None
+    from ..db import semantic
+    mid = semantic.approved_id()
     return mid if mid in models else None
+
+
+def review_confidence() -> float:
+    """Below this highest class probability a structure is flagged for review (sem.thresholds; E17: 0.7 keeps ~59% of building pixels at 4-6% error)."""
+    from ..db import semantic
+    return semantic.threshold("review_confidence")
 
 
 def load_engine(entry: dict, device="cpu"):

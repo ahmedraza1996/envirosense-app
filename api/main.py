@@ -9,10 +9,12 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response
+from fastapi.concurrency import run_in_threadpool
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import accounts, audit, auth, context, engines, events, geocal, geoimage, report, reviews, service, uploads
+from ..db import semantic
+from . import accounts, audit, auth, catalogue_routes, context, engines, events, geocal, geoimage, report, reviews, service, uploads
 from .scenes import catalogue, image_jpeg, scene
 
 
@@ -28,19 +30,20 @@ async def authenticate(request: Request):
     if perm == "public":
         return
     bearer = request.headers.get("authorization", "")
-    user = auth.user_from_token(request.cookies.get(auth.COOKIE) or (bearer[7:] if bearer.lower().startswith("bearer ") else None))
+    user = await run_in_threadpool(auth.user_from_token, request.cookies.get(auth.COOKIE) or (bearer[7:] if bearer.lower().startswith("bearer ") else None))
     if user is None:
         raise HTTPException(401, "sign in required")
     if user.get("must_change") and path not in ("/api/auth/me", "/api/auth/password"):
         raise HTTPException(403, "change your temporary password first")
     auth.set_current(user)
     if not auth.can(user, perm):
-        audit.log("denied", user["username"], method=request.method, path=path, needed=perm)
+        await run_in_threadpool(audit.log, "denied", user["username"], method=request.method, path=path, needed=perm)
         raise HTTPException(403, f"your role ({user['role']}) may not do this")
 
 
 app = FastAPI(title="EnviroSense damage assessment", version="0.1", dependencies=[Depends(authenticate)])
 app.include_router(accounts.router)
+app.include_router(catalogue_routes.router)
 WEB = Path(__file__).resolve().parents[1] / "web" / "dist"
 
 
@@ -150,7 +153,6 @@ async def create_upload(after: UploadFile = File(...), before: UploadFile | None
     if has_before and before_bounds is None and not is_tif(before) and bounds is None:
         raise HTTPException(400, "a plain before image needs its own corner coordinates (before_west, before_south, before_east, before_north)")
     uid, d = uploads.new_folder()
-    auth.register_owner(uid)
     try:
         a = await save_upload(after, d, "after_input")
         b = await save_upload(before, d, "before_input") if has_before else None
@@ -165,7 +167,7 @@ async def create_upload(after: UploadFile = File(...), before: UploadFile | None
 
 @app.get("/api/uploads")
 def get_uploads():
-    return [u for u in uploads.list_uploads() if auth.in_scope(u["id"])]
+    return uploads.list_uploads(auth.visible_units(auth.current()))
 
 
 @app.get("/api/uploads/{uid}")
@@ -201,7 +203,7 @@ def delete_upload(uid: str):
     u = auth.current()
     if not auth.in_scope(uid):
         raise HTTPException(404, f"no upload {uid}")
-    if u["role"] != "officer" and (auth.owners().get(uid) or {}).get("by") != u["username"]:
+    if u["role"] != "officer" and (auth.owner_of(uid) or {}).get("by") != u["username"]:
         raise HTTPException(403, "an analyst can delete only their own uploads; an approving officer can delete any in their unit tree")
     try:
         uploads.delete(uid)
@@ -305,12 +307,12 @@ def get_policy():
 
 @app.on_event("startup")
 def _retention():
-    uploads.purge_expired()
     auth.bootstrap()
-    top = next((k for k, v in auth.units().items() if v.get("parent") is None), None)
-    for d in (uploads.UPLOADS.iterdir() if uploads.UPLOADS.exists() else []):
-        if top and uploads.is_upload(d.name):
-            auth.adopt(d.name, top)
+    auth.purge_sessions()
+    semantic.sync_models(service.models(), engines.APPROVED)
+    uploads.purge_expired()
+    uploads.requeue_stale()
+    uploads._ensure_worker()                                  # picks up jobs that were queued or interrupted before this start
 
 
 # ---- audit ------------------------------------------------------------------------------------------------------
@@ -319,10 +321,8 @@ def _retention():
 def get_audit(assessment: str | None = None, limit: int = 200):
     """Entries from the caller's unit tree; entries from before accounts existed show only to the top unit."""
     u = auth.current()
-    vis, top = auth.visible_units(u), auth.units().get(u["unit"], {}).get("parent") is None
-    rows = [r for r in audit.read(assessment, 100000)
-            if (r["detail"].get("actor_unit") in vis if r["detail"].get("actor_unit") else top)]
-    return rows[-min(max(limit, 1), 1000):]
+    top = (auth.units().get(u["unit"]) or {}).get("parent") is None
+    return audit.read(assessment, min(max(limit, 1), 1000), units=auth.visible_units(u), include_unscoped=top)
 
 
 @app.get("/api/audit/verify")

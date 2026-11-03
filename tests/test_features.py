@@ -110,13 +110,12 @@ def alert(i, sev, lon):
 def stored(tmp_path, monkeypatch):
     monkeypatch.setattr(service, "STORE", tmp_path / "assessments")
     monkeypatch.setattr(report, "STORE", tmp_path / "assessments")
-    monkeypatch.setattr(reviews, "STORE", tmp_path / "reviews")
     (tmp_path / "assessments").mkdir()
     rec = {"id": "t_0001__m__area", "kind": "area", "pair_id": "t_0001", "created_utc": "2026-11-02 00:00:00",
            "scene": {"name": "Test event", "geotransform": [10, 1e-5, 0, 50, 0, -1e-5], "pixel_size_m": 0.5, "size_px": 1024,
                      "disaster": "Test event", "disaster_type": "fire", "pre_date": "2026-01-01", "post_date": "2026-11-01",
                      "centre_lat": 50.0, "centre_lon": 10.0},
-           "model": {"label": "Test model", "mode": "pre + post", "run": "r", "epoch": 3, "checkpoint": "runs/r/best.pt", "git_commit": "not recorded"},
+           "model": {"id": "m", "label": "Test model", "mode": "pre + post", "run": "r", "epoch": 3, "checkpoint": "runs/r/best.pt", "git_commit": "not recorded"},
            "summary": {"buildings": 1, "assessed": 1, "needs_review": 0, "coverage": 1.0, "severe_assessed": 1, "severe_share": 1.0,
                        "predicted": {"destroyed": 1, "major-damage": 0, "minor-damage": 0, "no-damage": 0, "not-detected": 0},
                        "truth": {}, "vs_truth": {}}, "zones": [], "isolated_severe": [], "alerts": [alert(1, "high", 10.0), alert(2, "medium", 10.01), alert(3, "medium", 10.02)],
@@ -168,14 +167,9 @@ def test_report_follows_the_review(stored, login_as):
 
 # ---- upload management --------------------------------------------------------------------------------------
 
-def test_upload_rename_and_delete(tmp_path, monkeypatch, stored):
-    monkeypatch.setattr(uploads, "UPLOADS", tmp_path / "uploads")
-    monkeypatch.setattr(uploads, "REVIEWS", tmp_path / "reviews")
-    uid, d = uploads.new_folder()
-    auth.adopt(uid, next(iter(auth.units())), "test")
-    (d / "meta.json").write_text(json.dumps({"id": uid, "name": "Old name", "disaster_type": "fire", "event_date": None,
-                                             "created_utc": "now", "model_id": "m"}))
-    (d / "status.json").write_text(json.dumps({"state": "done"}))
+def test_upload_rename_and_delete(stored, make_upload):
+    uid = make_upload(next(iter(auth.units())), "test_officer", "Old name", job="running")
+    d = make_upload.folder(uid)
     rec = {**stored, "id": f"{uid}__m__area", "pair_id": uid, "scene": {**stored["scene"], "name": "Old name", "disaster": "Old name"}}
     (service.STORE / f"{rec['id']}.json").write_text(json.dumps(rec))
     (service.STORE / f"{rec['id']}_damage.png").write_bytes(b"x")
@@ -185,9 +179,10 @@ def test_upload_rename_and_delete(tmp_path, monkeypatch, stored):
     assert json.loads((service.STORE / f"{rec['id']}.json").read_text())["scene"]["name"] == "Renamed"
     assert c.patch(f"/api/uploads/{uid}", json={"disaster_type": "meteor"}).status_code == 400
     assert c.patch(f"/api/uploads/{uid}", json={"event_date": "31/10/2026"}).status_code == 400
-    uploads._active.add(uid)
     assert c.delete(f"/api/uploads/{uid}").status_code == 409            # still processing
-    uploads._active.discard(uid)
+    from app.db import engine as dbe
+    with dbe.tx() as conn:
+        dbe.run(conn, "UPDATE ingest.jobs SET state = 'succeeded' WHERE upload_id = :u", u=uid)
     assert c.delete(f"/api/uploads/{uid}").status_code == 200
     assert not d.exists() and not list(service.STORE.glob(f"{uid}*"))
     assert c.delete(f"/api/uploads/{uid}").status_code == 404

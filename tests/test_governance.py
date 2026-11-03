@@ -5,56 +5,83 @@ from fastapi.testclient import TestClient
 
 from app.api import engines
 from app.api.main import app
+from app.db import semantic
 
 
-def test_default_model_is_the_approved_one(tmp_path, monkeypatch):
+def test_default_model_is_the_approved_one():
     models = {"unet_a": {}, "unet_b": {}}
-    f = tmp_path / "approved_model.json"
-    monkeypatch.setattr(engines, "APPROVED", f)
-    assert engines.approved_default(models) is None                       # no approval file: no silent default
-    f.write_text(json.dumps({"default_model": "unet_b"}))
+    assert engines.approved_default(models) is None                       # the approved model is not among these: no silent default
+    semantic.sync_models({"unet_a": {"kind": "unet"}, "unet_b": {"kind": "unet"}})
+    semantic.approve_model("unet_b", "t", "test approval of b")
     assert engines.approved_default(models) == "unet_b"
-    f.write_text(json.dumps({"default_model": "unet_missing"}))
-    assert engines.approved_default(models) is None                       # approved model not available
-    f.write_text("not json")
-    assert engines.approved_default(models) is None
+    semantic.approve_model("unet_a", "t", "test approval of a")
+    assert engines.approved_default(models) == "unet_a" and semantic.approved_model()["previous"] == "unet_b"
+    assert engines.approved_default({"unet_b": {}}) is None               # approved model not available here
 
 
 def test_models_endpoint_marks_exactly_one_approved_default():
     models = TestClient(app).get("/api/models").json()
     flagged = [m["id"] for m in models if m["approved_default"]]
-    approved = json.loads(engines.APPROVED.read_text())["default_model"]
-    assert flagged == [approved]
+    assert flagged == [semantic.approved_id()]
 
 
 # ---- audit log, review history, gates, provenance -------------------------------------------------------------
 
 import pytest
 
-from app.api import audit, gates, provenance, reviews
+from app.api import audit, auth, gates, provenance, reviews
 
 
-def test_audit_chain_detects_tampering(tmp_path, monkeypatch):
-    monkeypatch.setattr(audit, "PATH", tmp_path / "audit.jsonl")
+def _owner(sql):
+    """What someone with the owner's rights on the database server can do (the application's own role cannot)."""
+    from app.db import engine as dbe
+    with dbe.engine("owner").begin() as c:
+        c.exec_driver_sql(sql)
+
+
+def test_audit_chain_detects_tampering():
+    audit.verify()
+    _owner("ALTER TABLE audit.log DISABLE TRIGGER USER; TRUNCATE audit.log; ALTER TABLE audit.log ENABLE TRIGGER USER")
     assert audit.verify()["ok"] and audit.verify()["entries"] == 0
     audit.log("assess", "A. Analyst", "aid1", model="m")
     audit.log("review", "A. Analyst", "aid1", status="confirmed")
     audit.log("export", None, "aid1", kind="alerts.csv")
     assert audit.verify() == {"ok": True, "entries": 3, "first_bad_line": None, "reason": ""}
     assert [r["actor"] for r in audit.read("aid1")] == ["A. Analyst", "A. Analyst", "unknown"]
-    lines = audit.PATH.read_text().splitlines()
-    audit.PATH.write_text("\n".join([lines[0], lines[1].replace("confirmed", "dismissed"), lines[2]]) + "\n")   # edit a line
+    _owner("ALTER TABLE audit.log DISABLE TRIGGER USER; "
+           "UPDATE audit.log SET detail = replace(detail::text, 'confirmed', 'dismissed')::json WHERE seq = 2; "
+           "ALTER TABLE audit.log ENABLE TRIGGER USER")                                                            # edit an entry
     assert audit.verify()["ok"] is False and audit.verify()["first_bad_line"] == 2
-    audit.PATH.write_text("\n".join([lines[0], lines[2]]) + "\n")                                                  # remove a line
+    _owner("ALTER TABLE audit.log DISABLE TRIGGER USER; DELETE FROM audit.log WHERE seq = 2; ALTER TABLE audit.log ENABLE TRIGGER USER")   # remove one
     assert audit.verify()["ok"] is False
 
 
-REC = {"alerts": [{"alert_id": "AL-1"}, {"alert_id": "AL-2"}]}
+def test_the_database_itself_refuses_to_change_or_break_the_audit_chain():
+    import sqlalchemy as sa
+    from sqlalchemy import exc
+    from app.db import engine as dbe
+    audit.log("assess", "a", "x")
+    audit.log("review", "a", "x")
+    for sql in ("UPDATE audit.log SET actor = 'someone else'", "DELETE FROM audit.log", "TRUNCATE audit.log"):
+        with pytest.raises(exc.DBAPIError, match="append-only|permission denied"):
+            with dbe.tx() as c:                                                                  # the application's role
+                c.execute(sa.text(sql))
+    with pytest.raises(exc.DBAPIError, match="does not follow the last one"):
+        with dbe.tx() as c:
+            c.execute(sa.text("INSERT INTO audit.log (seq, utc, action, actor, prev, hash) VALUES (7, now(), 'x', 'y', repeat('0', 64), repeat('1', 64))"))
+    assert audit.verify() == {"ok": True, "entries": 2, "first_bad_line": None, "reason": ""}
 
 
-def test_review_needs_name_and_reason_and_keeps_history(tmp_path, monkeypatch):
-    monkeypatch.setattr(reviews, "STORE", tmp_path / "reviews")
-    off = lambda status, note, by: reviews.set_review("a", REC, "AL-1", status, note, by, "officer", "u_top")
+def _rec():
+    return {"id": "a", "pair_id": "p", "scene": {"disaster": "d", "pair_id": "p"}, "model": {"id": "unet_paired_mis", "label": "m"},
+            "alerts": [_alert("AL-1"), _alert("AL-2")], "created_utc": "2026-11-02 00:00:00"}
+
+
+REC = {"alerts": [{"alert_id": "AL-1"}, {"alert_id": "AL-2"}]}      # only the ids matter for counts()
+
+
+def test_review_needs_name_and_reason_and_keeps_history():
+    off = lambda status, note, by: reviews.set_review("a", _rec(), "AL-1", status, note, by, "officer", "u_top")
     with pytest.raises(reviews.ReviewError):
         off("proposed", "ok", "")                                                          # no reviewer
     with pytest.raises(reviews.ReviewError):
@@ -70,7 +97,7 @@ def test_review_needs_name_and_reason_and_keeps_history(tmp_path, monkeypatch):
     off("proposed", "verified on site", "R2")
     off("confirmed", "agreed", "R3")
     with pytest.raises(PermissionError):
-        reviews.set_review("a", REC, "AL-1", "retracted", "x", "A1", "analyst", "u_top")  # an analyst cannot retract
+        reviews.set_review("a", _rec(), "AL-1", "retracted", "x", "A1", "analyst", "u_top")  # an analyst cannot retract
     e = off("retracted", "site visit found no damage", "R3")
     assert e["status"] == "retracted" and e["reviewed_by"] == "R3"
     assert [(h["status"], h["by"]) for h in e["history"]] == [("proposed", "R1"), ("needs_info", "R2"), ("proposed", "R2"), ("confirmed", "R3"), ("retracted", "R3")]
@@ -129,23 +156,16 @@ def test_review_endpoint_logs_nothing_for_an_unknown_assessment(login_as):
     assert c.get("/api/audit/verify", headers=login_as("an_auditor", "auditor")).json()["ok"] is True
 
 
-def test_retention_rule_deletes_only_expired_uploads(tmp_path, monkeypatch):
-    from datetime import datetime, timedelta, timezone
+def test_retention_rule_deletes_only_expired_uploads(tmp_path, monkeypatch, make_upload):
     from app.api import uploads
-    monkeypatch.setattr(uploads, "UPLOADS", tmp_path / "uploads")
     monkeypatch.setattr(uploads, "RETENTION", tmp_path / "retention.json")
-    now = datetime.now(timezone.utc)
-    for uid, age, state in (("upl_00000001", 40, "done"), ("upl_00000002", 5, "done"), ("upl_00000003", 40, "running")):
-        d = uploads.UPLOADS / uid
-        d.mkdir(parents=True)
-        (d / "meta.json").write_text(json.dumps({"id": uid, "name": uid, "created_utc": (now - timedelta(days=age)).strftime("%Y-%m-%d %H:%M:%S")}))
-        (d / "status.json").write_text(json.dumps({"state": state}))
+    top = next(iter(auth.units()))
+    old, recent, busy = (make_upload(top, "t", "old", 40), make_upload(top, "t", "recent", 5), make_upload(top, "t", "busy", 40, job="running"))
     assert uploads.expired(None) == []                                                # no rule: nothing is ever deleted
-    # old uploads go; an old one marked "running" that no worker holds is an interrupted job (info() reports it as failed) and goes too
-    assert set(uploads.expired(30)) == {"upl_00000001", "upl_00000003"}
+    assert set(uploads.expired(30)) == {old}                                          # an old upload that is still being processed is left alone
     uploads.RETENTION.write_text(json.dumps({"upload_retention_days": 30, "notice": "n"}))
-    assert set(uploads.purge_expired()) == {"upl_00000001", "upl_00000003"}
-    assert not (uploads.UPLOADS / "upl_00000001").exists() and (uploads.UPLOADS / "upl_00000002").exists()   # the recent upload stays
+    assert set(uploads.purge_expired()) == {old}
+    assert not make_upload.folder(old).exists() and make_upload.folder(recent).exists() and make_upload.folder(busy).exists()   # the recent and busy ones stay
     last = audit.read()[-1]
     assert last["action"] == "delete_upload" and last["actor"].startswith("system")
 
@@ -193,10 +213,10 @@ def test_every_control_in_place_names_evidence_that_exists():
         assert (app / "governance" / name).exists(), name
 
 
-def test_incident_report_lists_retractions_denied_actions_and_failed_sign_ins(tmp_path, monkeypatch):
+def test_incident_report_lists_retractions_denied_actions_and_failed_sign_ins():
     from app.api import incidents
-    monkeypatch.setattr(reviews, "STORE", tmp_path / "reviews")
-    off = lambda status, note, by: reviews.set_review("asm1", REC, "AL-1", status, note, by, "officer", "u_top")
+    rec = {**_rec(), "id": "asm1"}
+    off = lambda status, note, by: reviews.set_review("asm1", rec, "AL-1", status, note, by, "officer", "u_top")
     off("proposed", "ok", "R1")
     off("confirmed", "agreed", "R2")
     off("retracted", "field visit found no damage", "R2")

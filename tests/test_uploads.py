@@ -37,9 +37,9 @@ def store(tmp_path, monkeypatch):
 def upload(tmp_path, name, rgb, tf, model_id, **meta):
     uid, d = uploads.new_folder()
     imagery.write_geotiff(d / "after_input.tif", rgb, tf)
-    (d / "meta.json").write_text(__import__("json").dumps({"id": uid, "name": name, "disaster_type": "fire",
-                                                          "model_id": model_id, "after_file": "after_input.tif",
-                                                          "created_utc": "now", **meta}))
+    from app.api import auth
+    uploads.register(uid, {"name": name, "disaster_type": "fire", "model_id": model_id, "after_file": "after_input.tif", **meta},
+                     next(iter(auth.units())), "test", queue=False)
     return uid, uploads.process(uid)
 
 

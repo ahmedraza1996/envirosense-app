@@ -11,7 +11,7 @@ import cv2
 import numpy as np
 
 from . import gates, provenance, zones
-from .engines import LABEL_IDS, REVIEW_CONFIDENCE, ROOT, XBD, class_name, discover_models, load_engine
+from .engines import LABEL_IDS, ROOT, XBD, class_name, discover_models, load_engine, review_confidence
 from .scenes import CACHE, pixel_size_m, scene  # noqa: F401  (CACHE is also used by main)
 
 STORE = ROOT / "runs" / "app" / "assessments"
@@ -49,8 +49,8 @@ def to_feature(b, pair_id, model_id, mode, lnglat_wkt):
     ll = shp_wkt.loads(lnglat_wkt) if lnglat_wkt else None
     llc = ll.centroid if ll is not None else None
     pred = class_name(b["predicted"])
-    review = pred is None or b["confidence"] < REVIEW_CONFIDENCE
-    reasons = (["not_detected"] if pred is None else []) + (["low_confidence"] if pred and b["confidence"] < REVIEW_CONFIDENCE else [])
+    review = pred is None or b["confidence"] < review_confidence()
+    reasons = (["not_detected"] if pred is None else []) + (["low_confidence"] if pred and b["confidence"] < review_confidence() else [])
     true = b["true_subtype"] if b["true_subtype"] in LABEL_IDS else None
     return {"type": "Feature", "id": b["uid"], "geometry": geom, "properties": {
         "building_id": b["uid"], "event_id": pair_id, "predicted_class": pred,
@@ -78,7 +78,7 @@ def assess(pair_id: str, model_id: str, force: bool = False) -> dict:
     record = {"id": aid, "pair_id": pair_id, "created_utc": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
               "scene": sc, "model": {"id": model_id, "label": models()[model_id]["label"], "kind": eng.kind,
                                      "mode": eng.mode, **eng.info},
-              "review_confidence_threshold": REVIEW_CONFIDENCE, "summary": zones.summarise(feats),
+              "review_confidence_threshold": review_confidence(), "summary": zones.summarise(feats),
               "zones": zs, "isolated_severe": isolated, "scene_metrics": res["scene_metrics"],
               "has_damage_map": has_map, "type": "FeatureCollection", "features": feats}
     STORE.mkdir(parents=True, exist_ok=True)
@@ -136,7 +136,7 @@ def area_record(key: str, scene_info: dict, model_id: str, eng, loc, dmg, dmg_pr
     feats = []
     for s in structs:
         pred = zones.NAMES[s["predicted"]]
-        review = s["confidence"] < REVIEW_CONFIDENCE
+        review = s["confidence"] < review_confidence()
         feats.append({"type": "Feature", "id": s["id"],
                       "geometry": {"type": "Polygon", "coordinates": [s["polygon_px"] + [s["polygon_px"][0]]]},
                       "properties": {"building_id": s["id"], "event_id": key, "predicted_class": pred,
@@ -162,14 +162,14 @@ def area_record(key: str, scene_info: dict, model_id: str, eng, loc, dmg, dmg_pr
     else:
         inputs = {"after": XBD / scene_info["split"] / "images" / f"{key}_post_disaster.png",
                   "before": XBD / scene_info["split"] / "images" / f"{key}_pre_disaster.png"}
-    thresholds = {"alert_rule": al.RULE, "review_confidence": REVIEW_CONFIDENCE, "min_localized": _eng.MIN_LOCALIZED,
+    thresholds = {"alert_rule": al.RULE, "review_confidence": review_confidence(), "min_localized": _eng.MIN_LOCALIZED,
                   "temperature": getattr(eng, "temperature", 1.0), "min_severe_m2": al.MIN_SEVERE_M2, "eps_m": al.EPS_M, "min_area_px": al.MIN_AREA_PX, "majority": al.MAJORITY}
     extra = {"provenance": provenance.build(inputs, run_dir, thresholds),
              "gates": gates.evaluate(scene_info, model_id, _eng.approved_default(models())), **(extra or {})}
     record = {"id": aid, "kind": "area", "pair_id": key,
               "created_utc": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"), "scene": scene_info,
               "model": {"id": model_id, "label": models()[model_id]["label"], "kind": eng.kind, "mode": mode, **eng.info},
-              "review_confidence_threshold": REVIEW_CONFIDENCE, "summary": zones.summarise(feats),
+              "review_confidence_threshold": review_confidence(), "summary": zones.summarise(feats),
               "alerts": alerts, "alert_rule": al.RULE,
               "below_threshold": below, "isolated_severe": [],
               "zones": [], "benchmark": bench, "scene_metrics": scene_metrics or {},
@@ -177,6 +177,8 @@ def area_record(key: str, scene_info: dict, model_id: str, eng, loc, dmg, dmg_pr
     STORE.mkdir(parents=True, exist_ok=True)
     save_damage_map(dmg, STORE / f"{aid}_damage.png")
     (STORE / f"{aid}.json").write_text(json.dumps(record))
+    from . import auth, registry
+    registry.register(record, STORE / f"{aid}.json", created_by=auth.actor() if auth.current() else None)
     return record
 
 

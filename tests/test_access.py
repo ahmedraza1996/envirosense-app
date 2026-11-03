@@ -4,7 +4,8 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from app.api import audit, auth, engines, reviews, service, uploads
+from app.api import audit, auth, reviews, service, uploads
+from app.db import semantic
 from app.api.main import app
 from app.tests.test_features import stored  # noqa: F401  (fixture: a stored area assessment with three alerts)
 
@@ -99,15 +100,8 @@ def test_roles_limit_what_each_user_can_do(stored, tree):  # noqa: F811
     assert {e["actor"] for e in denied} >= {"ana", "aud", "adm"}
 
 
-def test_uploads_are_visible_only_inside_the_owner_unit_tree(tmp_path, monkeypatch, tree):
-    monkeypatch.setattr(uploads, "UPLOADS", tmp_path / "uploads")
-    ids = {}
-    for who, unit in (("karachi_user", tree["karachi"]), ("punjab_user", tree["punjab"])):
-        uid, d = uploads.new_folder()
-        (d / "meta.json").write_text(json.dumps({"id": uid, "name": who, "created_utc": "2026-11-02 00:00:00", "model_id": "m"}))
-        (d / "status.json").write_text(json.dumps({"state": "done"}))
-        auth.adopt(uid, unit, who)
-        ids[who] = uid
+def test_uploads_are_visible_only_inside_the_owner_unit_tree(tree, make_upload):
+    ids = {who: make_upload(unit, who, who) for who, unit in (("karachi_user", tree["karachi"]), ("punjab_user", tree["punjab"]))}
     kar, pun = mk("kar_analyst", "analyst", tree["karachi"]), mk("pun_officer", "officer", tree["punjab"])
     sindh_off, top_off = mk("sindh_officer", "officer", tree["sindh"]), mk("top_officer", "officer", tree["top"])
     names = lambda h: sorted(u["name"] for u in c.get("/api/uploads", headers=h).json())
@@ -162,7 +156,8 @@ def test_only_an_administrator_changes_the_approved_model_and_it_is_logged(tmp_p
     assert c.put("/api/admin/approved-model", headers=adm, json={**body, "model_id": "clf"}).status_code == 400
     r = c.put("/api/admin/approved-model", headers=adm, json=body)
     assert r.status_code == 200 and r.json()["default_model"] == "unet_b" and r.json()["previous"] == "unet_paired_mis"
-    assert json.loads(engines.APPROVED.read_text())["default_model"] == "unet_b"
+    assert semantic.approved_id() == "unet_b"
+    assert [m["id"] for m in semantic.model_versions() if m["status"] == "approved"] == ["unet_b"]          # one approved row, the old one is a candidate again
     row = (tmp_path / "decision_log.md").read_text()
     assert "unet_b" in row and "model_admin" in row and "ablation shows" in row
     last = audit.read()[-1]

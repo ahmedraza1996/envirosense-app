@@ -54,4 +54,4 @@ deleted by the user at any time. No personal data are collected beyond a reviewe
 
 ## 8. Change control
 
-A new default model, a new alert threshold or a new data source needs an entry in `decision_log.md` and, for models, an update of `approved_model.json`.
+A new default model, a new alert threshold or a new data source needs an entry in `decision_log.md` and, for models, an approval by an administrator (`PUT /api/admin/approved-model`, stored in `sem.model_versions` and the audit log).
