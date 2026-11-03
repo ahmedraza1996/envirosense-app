@@ -265,3 +265,9 @@ tr.dismissed td { color: var(--ink-3); text-decoration: line-through; }
 .audit-table td { font-size: 12px; }
 .mono { font-family: var(--mono); font-size: 11px; }
 .status-proposed { color: var(--accent); }
+
+.chip { display: inline-block; margin: 0 4px 4px 0; padding: 1px 7px; border-radius: 10px; background: var(--panel-2, #efede7); font-size: 12px; }
+.perm-picker { display: grid; gap: 6px; border: 1px solid var(--line, #d9d6cc); border-radius: var(--radius, 8px); padding: 10px 12px; margin: 0; max-width: 640px; }
+.admin-form .perm-picker label, .perm-picker label { display: grid; grid-template-columns: 20px 150px 1fr; gap: 8px; align-items: baseline; text-align: left; }
+.perm-picker input[type="checkbox"] { width: auto; margin: 0; justify-self: start; }
+.perm-picker code { text-align: left; }

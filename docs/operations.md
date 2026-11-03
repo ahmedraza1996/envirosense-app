@@ -26,6 +26,15 @@ and the caches. The database refers to them; deleting an upload removes both.
 - One-time set-up on a new server: install `postgresql-17 postgresql-17-postgis-3`, run `sudo sh scripts/db_bootstrap.sh`, then
   `cd app && alembic -c alembic.ini upgrade head` with `DATABASE_MIGRATE_URL` set. Data from the file-based version: `python -m app.scripts.db_import_files --apply`.
 
+## Roles and permissions
+
+Roles are rows (`iam.roles`), what a role may do is `iam.role_permissions`, and which permission a route needs is `iam.route_policy` (first matching rule wins, a route without a rule is refused).
+The four built-in roles (administrator, analyst, approving officer, auditor) are fixed by the database. An administrator of the top unit creates other roles in the Roles screen or with
+`POST /api/admin/roles` (optionally `based_on` an existing role) and changes them with `PUT /api/admin/roles/{key}/permissions` (a reason is required); both are written to the audit log.
+`iam.permission_conflicts` lists permission pairs no role may hold together (managing users or reading the audit log, with handling imagery, alerts or exports); the database refuses such a role.
+Roles are shared by the whole organisation, so only the top unit manages them; a unit's administrator can assign them. A process keeps roles for up to 10 seconds, a change made through the
+application shows at once in that process. The route policy is changed by a migration, not in the application, because a new route needs its rule written with it (a test checks every route has one).
+
 ## Migrations
 
 The schema is SQL in `db/migrations/versions/`. Change it by adding a new revision (`alembic -c alembic.ini revision -m "what"`), never by editing an applied one.

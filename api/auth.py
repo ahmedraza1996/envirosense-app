@@ -12,7 +12,7 @@ Roles
 
 Sessions are rows in iam.sessions; the cookie (HttpOnly) or an `Authorization: Bearer` header carries the session id with an HMAC signature, so
 signing out, a password change or deactivating the account ends a session at once. Passwords are stored as scrypt hashes.
-Every API route needs an entry in POLICY; a route without one is refused (a test enforces this). Accounts, units, sessions and sign-in
+Every API route needs a rule in iam.route_policy; a route without one is refused (a test enforces this). Roles, their permissions and the route rules are rows (migration 0003), not code. Accounts, units, sessions and sign-in
 throttling live in PostgreSQL (schema iam); it has not been independently security-tested.
 """
 import contextvars
@@ -21,8 +21,10 @@ import hmac
 import os
 import re
 import secrets
+import threading
 import time
 import uuid
+from collections.abc import Mapping
 from datetime import datetime, timezone
 
 from sqlalchemy import exc as sa_exc
@@ -35,45 +37,60 @@ SESSION_HOURS = 12
 MIN_PASSWORD = 10
 LOCK_AFTER, LOCK_SECONDS = 5, 300
 COOKIE = "es_session"
-ROLES = ("admin", "analyst", "officer", "auditor")
-ROLE_LABEL = {"admin": "System administrator", "analyst": "Analyst", "officer": "Approving officer", "auditor": "Auditor"}
+ROLE_TTL = 10.0     # seconds a process keeps the roles and the route policy it read; a change made in this process shows at once
 
-_ANALYST = {"view", "assess", "upload", "delete_own_upload", "review", "review_read", "geo_offset"}
-PERMS = {
-    "admin": {"users", "audit", "model_approve"},
-    "analyst": _ANALYST,
-    "officer": _ANALYST | {"approve", "export", "delete_upload"},
-    "auditor": {"audit", "review_read"},
-}
-# (method, path regex, permission). "any" = every signed-in user, "public" = no sign-in. First match wins; no match = refused.
-POLICY = [
-    ("GET", r"/api/health", "public"),
-    ("POST", r"/api/auth/login", "public"),
-    ("POST", r"/api/auth/logout", "public"),
-    ("GET", r"/api/auth/me", "any"),
-    ("POST", r"/api/auth/password", "any"),
-    ("GET", r"/api/policy", "any"),
-    ("GET", r"/api/approved-model", "any"),
-    ("GET", r"/api/semantic/.*", "any"),
-    ("PUT", r"/api/admin/thresholds/[^/]+", "model_approve"),
-    ("GET", r"/api/jobs", "view"),
-    ("GET", r"/api/admin/(users|units)", "users"),
-    ("(POST|PATCH)", r"/api/admin/(users|units)(/[^/]+)?", "users"),
-    ("POST", r"/api/admin/users/[^/]+/reset-password", "users"),
-    ("PUT", r"/api/admin/approved-model", "model_approve"),
-    ("GET", r"/api/audit(/verify)?", "audit"),
-    ("GET", r"/api/assessments/[^/]+/reviews", "review_read"),
-    ("PUT", r"/api/assessments/[^/]+/alerts/[^/]+/review", "review"),
-    ("GET", r"/api/assessments/[^/]+/export\.(geojson|csv)", "export"),
-    ("(PUT|POST)", r"/api/assessments/[^/]+/geo-offset(/measure)?", "geo_offset"),
-    ("(POST)", r"/api/(assess|assess-area)", "assess"),
-    ("POST", r"/api/events/[^/]+/assess", "assess"),
-    ("POST", r"/api/uploads", "upload"),
-    ("PATCH", r"/api/uploads/[^/]+", "upload"),
-    ("DELETE", r"/api/uploads/[^/]+", "delete_own_upload"),   # an officer may delete any upload in scope; an analyst only their own
-    ("GET", r"/api/(models|scenes|uploads|events|assessments)(/.*)?", "view"),
-]
-_POLICY = [(m, re.compile(r), p) for m, r, p in POLICY]
+
+class _Cache:
+    """Roles (with their permissions) and the route policy, read from schema iam. Role and route rules are data: see migration 0003."""
+    stamp = 0.0
+    roles: dict = {}
+    policy: list = []
+    lock = threading.Lock()
+
+
+def _load(force: bool = False) -> None:
+    if not force and _Cache.roles and time.monotonic() - _Cache.stamp < ROLE_TTL:
+        return
+    with _Cache.lock, tx() as c:
+        roles = {r["key"]: {"label": r["label"], "description": r["description"], "builtin": r["builtin"], "perms": set()}
+                 for r in rows(c, "SELECT key, label, description, builtin FROM iam.roles ORDER BY builtin DESC, key")}
+        for r in rows(c, "SELECT role_key, permission_key FROM iam.role_permissions"):
+            roles[r["role_key"]]["perms"].add(r["permission_key"])
+        policy = [(re.compile(r["method"]), re.compile(r["path"]), r["permission"])
+                  for r in rows(c, "SELECT method, path, permission FROM iam.route_policy ORDER BY position")]
+    _Cache.roles, _Cache.policy, _Cache.stamp = roles, policy, time.monotonic()
+
+
+def invalidate_roles() -> None:
+    _Cache.stamp = 0.0
+
+
+def role_defs() -> dict:
+    _load()
+    return _Cache.roles
+
+
+def perms_of(role: str) -> set:
+    return set(role_defs().get(role, {}).get("perms", ()))
+
+
+class _Perms(Mapping):
+    """auth.PERMS[role] -> the permissions of a role (live view of the database)."""
+    def __getitem__(self, role):
+        if role not in role_defs():
+            raise KeyError(role)
+        return perms_of(role)
+    def __iter__(self): return iter(role_defs())
+    def __len__(self): return len(role_defs())
+
+
+class _Keys:
+    """auth.ROLES: the role keys, in a stable order."""
+    def __contains__(self, k): return k in role_defs()
+    def __iter__(self): return iter(role_defs())
+
+
+PERMS, ROLES = _Perms(), _Keys()
 
 _current: contextvars.ContextVar = contextvars.ContextVar("current_user", default=None)
 _STAMP = "YYYY-MM-DD HH24:MI:SS"
@@ -182,10 +199,10 @@ def users() -> dict:
 
 def public_user(name: str, rec: dict, _units: dict | None = None) -> dict:
     u = _units if _units is not None else units()
-    return {"username": name, "name": rec["name"], "role": rec["role"], "role_label": ROLE_LABEL[rec["role"]], "unit": rec["unit"],
+    return {"username": name, "name": rec["name"], "role": rec["role"], "role_label": role_defs()[rec["role"]]["label"], "unit": rec["unit"],
             "unit_name": u.get(rec["unit"], {}).get("name", ""), "unit_path": path_names(rec["unit"], u), "active": rec.get("active", True),
             "must_change_password": rec.get("must_change", False), "created_utc": rec.get("created_utc"),
-            "last_login_utc": rec.get("last_login_utc"), "permissions": sorted(PERMS[rec["role"]])}
+            "last_login_utc": rec.get("last_login_utc"), "permissions": sorted(perms_of(rec["role"]))}
 
 
 def list_users(in_units: set | None = None) -> list:
@@ -293,6 +310,87 @@ def bootstrap() -> str | None:
     return pw
 
 
+# ---- roles, permissions, route policy -------------------------------------------------------------------------
+
+def is_top(user: dict) -> bool:
+    """Roles are shared by the whole organisation, so only users of the top unit manage them."""
+    return bool(user) and (units().get(user["unit"]) or {}).get("parent") is None
+
+
+def list_roles() -> list:
+    with tx() as c:
+        counts = {r["role"]: r["n"] for r in rows(c, "SELECT role, count(*) AS n FROM iam.users GROUP BY role")}
+    return [{"key": k, "label": v["label"], "description": v["description"], "builtin": v["builtin"], "permissions": sorted(v["perms"]), "users": counts.get(k, 0)}
+            for k, v in role_defs().items()]
+
+
+def list_permissions() -> dict:
+    with tx() as c:
+        return {"permissions": rows(c, "SELECT key, description, sensitive FROM iam.permissions WHERE assignable ORDER BY sensitive DESC, key"),
+                "conflicts": rows(c, "SELECT a, b, reason FROM iam.permission_conflicts ORDER BY a, b")}
+
+
+def route_rules() -> list:
+    with tx() as c:
+        return rows(c, "SELECT position, method, path, permission FROM iam.route_policy ORDER BY position")
+
+
+def _role_refused(e: Exception, fallback: str) -> AuthError:
+    orig = getattr(e, "orig", None)
+    diag = getattr(orig, "diag", None)
+    msg = getattr(diag, "message_primary", None)
+    return AuthError(msg if getattr(orig, "sqlstate", "") in ("23514", "23503") and msg and "violates" not in msg else fallback)
+
+
+def create_role(key: str, label: str, description: str, permissions: list, by: str) -> dict:
+    key = (key or "").strip().lower()
+    if not re.fullmatch(r"[a-z][a-z0-9_]{1,31}", key):
+        raise AuthError("a role key has 2 to 32 characters: lowercase letters, digits and underscore, starting with a letter")
+    if not 2 <= len((label or "").strip()) <= 60:
+        raise AuthError("a role name needs 2 to 60 characters")
+    try:
+        with tx() as c:
+            run(c, "INSERT INTO iam.roles (key, label, description, created_by) VALUES (:k, :l, :d, :b)", k=key, l=label.strip(), d=(description or "").strip()[:300], b=by)
+            for p in sorted(set(permissions or [])):
+                run(c, "INSERT INTO iam.role_permissions (role_key, permission_key) VALUES (:r, :p)", r=key, p=p)
+    except sa_exc.IntegrityError as e:
+        raise _role_refused(e, f"role {key} already exists or a permission is unknown") from e
+    except sa_exc.InternalError as e:
+        raise _role_refused(e, "that combination of permissions is not allowed") from e
+    invalidate_roles()
+    return next(r for r in list_roles() if r["key"] == key)
+
+
+def set_role_permissions(key: str, permissions: list) -> dict:
+    perms = sorted(set(permissions or []))
+    try:
+        with tx() as c:
+            if not one(c, "SELECT 1 AS x FROM iam.roles WHERE key = :k FOR UPDATE", k=key):
+                raise KeyError(key)
+            run(c, "DELETE FROM iam.role_permissions WHERE role_key = :k", k=key)
+            for p in perms:
+                run(c, "INSERT INTO iam.role_permissions (role_key, permission_key) VALUES (:r, :p)", r=key, p=p)
+    except sa_exc.IntegrityError as e:
+        raise _role_refused(e, "a permission is unknown") from e
+    except sa_exc.InternalError as e:
+        raise _role_refused(e, "that change is not allowed") from e
+    invalidate_roles()
+    return next(r for r in list_roles() if r["key"] == key)
+
+
+def delete_role(key: str) -> None:
+    try:
+        with tx() as c:
+            if not one(c, "SELECT 1 AS x FROM iam.roles WHERE key = :k", k=key):
+                raise KeyError(key)
+            run(c, "DELETE FROM iam.roles WHERE key = :k", k=key)
+    except sa_exc.DBAPIError as e:
+        if getattr(e.orig, "sqlstate", "") == "23503":
+            raise AuthError("users still hold this role; give them another role first") from e
+        raise _role_refused(e, "that role cannot be deleted") from e
+    invalidate_roles()
+
+
 # ---- sessions -------------------------------------------------------------------------------------------------
 
 def _secret() -> bytes:
@@ -379,8 +477,9 @@ def login(username: str, password: str, client: str | None = None) -> tuple[dict
 # ---- request checks -------------------------------------------------------------------------------------------
 
 def required(method: str, path: str) -> str | None:
-    for m, rx, perm in _POLICY:
-        if re.fullmatch(m, method) and rx.fullmatch(path):
+    _load()
+    for m, rx, perm in _Cache.policy:
+        if m.fullmatch(method) and rx.fullmatch(path):
             return perm
     return None
 
@@ -399,7 +498,7 @@ def set_current(user: dict | None):
 
 
 def can(user: dict, perm: str) -> bool:
-    return perm in ("any",) or perm in PERMS.get(user["role"], set())
+    return perm == "any" or perm in perms_of(user["role"])
 
 
 def visible_units(user: dict) -> set:

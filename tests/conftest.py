@@ -41,7 +41,9 @@ def reset_database():
         c.exec_driver_sql(f"TRUNCATE {RESET} RESTART IDENTITY CASCADE")
         c.exec_driver_sql("ALTER TABLE audit.log ENABLE TRIGGER USER")
         c.exec_driver_sql("DELETE FROM sem.thresholds WHERE set_by <> 'migration'")
+        c.exec_driver_sql("DELETE FROM iam.roles WHERE NOT builtin")
     semantic._threshold_cache.clear()
+    auth.invalidate_roles()
 
 
 @pytest.fixture(autouse=True)

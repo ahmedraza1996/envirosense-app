@@ -203,7 +203,7 @@ def delete_upload(uid: str):
     u = auth.current()
     if not auth.in_scope(uid):
         raise HTTPException(404, f"no upload {uid}")
-    if u["role"] != "officer" and (auth.owner_of(uid) or {}).get("by") != u["username"]:
+    if "delete_upload" not in auth.perms_of(u["role"]) and (auth.owner_of(uid) or {}).get("by") != u["username"]:
         raise HTTPException(403, "an analyst can delete only their own uploads; an approving officer can delete any in their unit tree")
     try:
         uploads.delete(uid)

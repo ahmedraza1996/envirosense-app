@@ -18,7 +18,7 @@ import sqlalchemy as sa
 from sqlalchemy import exc as sa_exc
 
 from ..db.engine import one, rows, run, tx
-from . import registry
+from . import auth, registry
 
 STATUSES = ("pending", "proposed", "confirmed", "dismissed", "needs_info", "retracted")
 DEFAULT_INCLUDE = ("pending", "proposed", "confirmed", "needs_info")
@@ -57,7 +57,8 @@ def set_review(aid: str, rec: dict, alert_id: str, status: str, note: str = "", 
     note = (note or "").strip()
     if not by:
         raise ReviewError("a reviewer is required")
-    if role not in ("analyst", "officer"):
+    perms = auth.perms_of(role)
+    if "review" not in perms:
         raise PermissionError("this role cannot review alerts")
     if len(note) > NOTE_MAX:
         raise ReviewError(f"note is limited to {NOTE_MAX} characters")
@@ -70,7 +71,7 @@ def set_review(aid: str, rec: dict, alert_id: str, status: str, note: str = "", 
             old = one(c, "SELECT status, proposed_by FROM wf.alert_reviews WHERE assessment_id = :a AND alert_id = :i FOR UPDATE", a=aid, i=alert_id) or {}
             if status == "retracted" and old.get("status") != "confirmed":
                 raise ReviewError("only a confirmed alert can be retracted")
-            if status in ("confirmed", "retracted") and role != "officer":
+            if status in ("confirmed", "retracted") and "approve" not in perms:
                 raise PermissionError(f"only an approving officer can {'confirm' if status == 'confirmed' else 'retract'} an alert")
             if status == "confirmed":
                 if old.get("status") != "proposed":

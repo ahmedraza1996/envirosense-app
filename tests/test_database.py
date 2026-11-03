@@ -225,3 +225,106 @@ def test_exactly_one_model_version_is_approved_and_it_needs_an_approver():
 def _user(name, role):
     auth.create_user(name, name, role, next(iter(auth.units())), "Passw0rd-long-1", "t", must_change=False)
     return name
+
+
+# ---- roles, permissions, route policy as data ------------------------------------------------------------------
+
+def _admin_headers(name="roles_admin", unit=None):
+    auth.create_user(name, name, "admin", unit or next(iter(auth.units())), "Passw0rd-long-1", "t", must_change=False)
+    return {"Authorization": f"Bearer {auth.make_token(name)}"}
+
+
+def test_built_in_roles_and_the_route_policy_are_rows_with_the_rights_they_always_had():
+    assert auth.perms_of("admin") == {"users", "audit", "model_approve"}
+    assert auth.perms_of("auditor") == {"audit", "review_read"}
+    assert auth.perms_of("analyst") == {"view", "assess", "upload", "delete_own_upload", "review", "review_read", "geo_offset"}
+    assert auth.perms_of("officer") == auth.perms_of("analyst") | {"approve", "export", "delete_upload"}
+    assert auth.required("GET", "/api/health") == "public" and auth.required("DELETE", "/api/uploads/upl_00000001") == "delete_own_upload"
+    assert auth.required("GET", "/api/not-a-route") is None
+    assert sql("SELECT count(*) AS n FROM iam.route_policy") == [{"n": 27}]
+
+
+def test_an_administrator_creates_a_role_and_a_user_holding_it_gets_exactly_those_rights():
+    adm = _admin_headers()
+    made = c.post("/api/admin/roles", headers=adm, json={"key": "field_lead", "label": "Field team lead", "based_on": "analyst", "permissions": ["export"],
+                                                          "description": "An analyst who may export for the field team"})
+    assert made.status_code == 200 and "export" in made.json()["permissions"] and "review" in made.json()["permissions"] and not made.json()["builtin"]
+    top = next(iter(auth.units()))
+    auth.create_user("lead1", "Lead One", "field_lead", top, "Passw0rd-long-1", "t", must_change=False)
+    h = {"Authorization": f"Bearer {auth.make_token('lead1')}"}
+    me = c.get("/api/auth/me", headers=h).json()
+    assert me["role"] == "field_lead" and me["role_label"] == "Field team lead" and "export" in me["permissions"] and "approve" not in me["permissions"]
+    assert c.get("/api/admin/users", headers=h).status_code == 403                               # not an administrator
+    log = [e for e in c.get("/api/audit", headers=adm).json() if e["action"] == "role_create"][-1]
+    assert log["detail"]["role"] == "field_lead" and log["detail"]["based_on"] == "analyst"
+
+
+def test_a_role_cannot_combine_permissions_that_must_stay_apart():
+    with pytest.raises(auth.AuthError, match='cannot hold both "review" and "users"|cannot hold both "users" and "review"'):
+        auth.create_role("overreach", "Overreach", "", ["users", "review"], "t")
+    with pytest.raises(auth.AuthError, match="cannot hold both"):
+        auth.create_role("watcher_doer", "Watcher doer", "", ["audit", "approve"], "t")
+    auth.create_role("ok_role", "Fine role", "", ["view", "review"], "t")
+    with pytest.raises(auth.AuthError, match="cannot hold both"):
+        auth.set_role_permissions("ok_role", ["view", "review", "users"])
+    assert auth.perms_of("ok_role") == {"view", "review"}                                       # the refused change left the role as it was
+    with pytest.raises(exc.DBAPIError, match="cannot hold both"):                               # and the database refuses it for any writer
+        with dbe.tx() as conn:
+            conn.execute(sa.text("INSERT INTO iam.role_permissions (role_key, permission_key) VALUES ('ok_role', 'audit')"))
+
+
+def test_built_in_roles_cannot_be_changed_only_copied():
+    with pytest.raises(auth.AuthError, match="built-in"):
+        auth.set_role_permissions("analyst", ["view"])
+    with pytest.raises(auth.AuthError, match="built-in"):
+        auth.delete_role("officer")
+    with pytest.raises(exc.DBAPIError, match="built-in"):
+        with dbe.tx("owner") as conn:                                                           # not even the owner of the tables
+            conn.execute(sa.text("DELETE FROM iam.role_permissions WHERE role_key = 'auditor'"))
+    with pytest.raises(exc.IntegrityError):                                                     # 'any' and 'public' are route rules, not rights a role holds
+        with dbe.tx() as conn:
+            conn.execute(sa.text("INSERT INTO iam.roles (key, label) VALUES ('sneaky', 'Sneaky'); INSERT INTO iam.role_permissions (role_key, permission_key) VALUES ('sneaky', 'any')"))
+
+
+def test_changing_a_custom_role_takes_effect_at_once_and_is_logged_with_a_reason():
+    adm = _admin_headers()
+    auth.create_role("reader", "Reader", "", ["view"], "t")
+    top = next(iter(auth.units()))
+    auth.create_user("reader1", "Reader One", "reader", top, "Passw0rd-long-1", "t", must_change=False)
+    h = {"Authorization": f"Bearer {auth.make_token('reader1')}"}
+    assert c.get("/api/scenes", headers=h).status_code == 200 and c.post("/api/uploads", headers=h).status_code == 403
+    assert c.put("/api/admin/roles/reader/permissions", headers=adm, json={"permissions": ["view", "upload"], "reason": "no"}).status_code == 400
+    r = c.put("/api/admin/roles/reader/permissions", headers=adm, json={"permissions": ["view", "upload"], "reason": "readers now add imagery too"})
+    assert r.status_code == 200 and r.json()["permissions"] == ["upload", "view"]
+    assert c.post("/api/uploads", headers=h).status_code != 403                                  # allowed through the policy (the request itself is incomplete)
+    assert c.put("/api/admin/roles/reader/permissions", headers=adm, json={"permissions": ["view", "nonsense"], "reason": "a typo in a permission"}).status_code == 400
+    e = [x for x in c.get("/api/audit", headers=adm).json() if x["action"] == "role_permissions_change"][-1]
+    assert e["detail"]["before"] == ["view"] and e["detail"]["after"] == ["upload", "view"] and "imagery" in e["detail"]["reason"]
+
+
+def test_a_role_that_users_hold_cannot_be_deleted_and_only_the_top_unit_manages_roles():
+    adm = _admin_headers()
+    top = next(iter(auth.units()))
+    sub = auth.create_unit("Regional office", top, "t")["id"]
+    auth.create_role("temp_role", "Temporary", "", ["view"], "t")
+    auth.create_user("holder", "Holder", "temp_role", sub, "Passw0rd-long-1", "t", must_change=False)
+    assert c.delete("/api/admin/roles/temp_role", headers=adm).status_code == 400
+    sub_adm = _admin_headers("regional_admin", sub)
+    assert c.post("/api/admin/roles", headers=sub_adm, json={"key": "x_role", "label": "X role"}).status_code == 403         # a unit's administrator manages users, not shared roles
+    assert c.get("/api/admin/roles", headers=sub_adm).status_code == 200                                                       # but may read them to assign them
+    auth.update_user("holder", role="analyst")
+    assert c.delete("/api/admin/roles/temp_role", headers=adm).status_code == 200
+    assert "temp_role" not in auth.ROLES
+
+
+def test_confirming_needs_the_approve_permission_not_a_particular_role_name():
+    from app.api import reviews
+    auth.create_role("reviewer_lite", "Reviewer lite", "", ["view", "review"], "t")
+    auth.create_role("senior_reviewer", "Senior reviewer", "", ["view", "review", "approve"], "t")
+    rec = _rec()
+    reviews.set_review("a", rec, "AL-1", "proposed", "ok", "P1", "reviewer_lite", "u")
+    with pytest.raises(PermissionError):
+        reviews.set_review("a", rec, "AL-1", "confirmed", "ok", "P2", "reviewer_lite", "u")
+    assert reviews.set_review("a", rec, "AL-1", "confirmed", "ok", "P2", "senior_reviewer", "u")["status"] == "confirmed"
+    with pytest.raises(PermissionError):
+        reviews.set_review("a", rec, "AL-2", "proposed", "ok", "A1", "auditor", "u")            # the auditor role has no review permission

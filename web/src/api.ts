@@ -204,11 +204,14 @@ export const tileNo = (pairId: string) => pairId.split("_").pop() ?? pairId;
 
 
 // ---- accounts ---------------------------------------------------------------------------------------------------
-export type Role = "admin" | "analyst" | "officer" | "auditor";
+export type Role = string;   // a role key: the four built-in roles or one an administrator created
 export interface User {
   username: string; name: string; role: Role; role_label: string; unit: string; unit_name: string; unit_path: string; active: boolean;
   must_change_password: boolean; created_utc?: string; last_login_utc?: string | null; permissions: string[]; temporary_password?: string | null;
 }
+export interface RoleInfo { key: string; label: string; description: string; builtin: boolean; permissions: string[]; users: number }
+export interface PermissionInfo { key: string; description: string; sensitive: boolean }
+export interface PermissionCatalogue { permissions: PermissionInfo[]; conflicts: { a: string; b: string; reason: string }[] }
 export interface UnitInfo { id: string; name: string; parent: string | null; path: string; users: number }
 export interface AuditEntry { seq: number; utc: string; action: string; actor: string; assessment: string | null; detail: Record<string, unknown> }
 export interface ApprovedModel { default_model: string | null; approved_utc?: string; approved_by?: string; reason?: string; previous?: string | null; available?: { id: string; label: string }[] }
@@ -226,6 +229,11 @@ export const accounts = {
   addUser: (u: { username: string; name: string; role: Role; unit: string; password?: string }) => send("POST", "/api/admin/users", u).then(json<User>),
   editUser: (username: string, patch: { name?: string; role?: Role; unit?: string; active?: boolean }) => send("PATCH", `/api/admin/users/${username}`, patch).then(json<User>),
   resetPassword: (username: string) => send("POST", `/api/admin/users/${username}/reset-password`).then(json<{ username: string; temporary_password: string }>),
+  roles: () => fetch("/api/admin/roles").then(json<RoleInfo[]>),
+  permissions: () => fetch("/api/admin/permissions").then(json<PermissionCatalogue>),
+  addRole: (r: { key: string; label: string; description: string; permissions: string[]; based_on?: string }) => send("POST", "/api/admin/roles", r).then(json<RoleInfo>),
+  setRolePermissions: (key: string, permissions: string[], reason: string) => send("PUT", `/api/admin/roles/${key}/permissions`, { permissions, reason }).then(json<RoleInfo>),
+  deleteRole: (key: string) => send("DELETE", `/api/admin/roles/${key}`).then(json<{ deleted: string }>),
   units: () => fetch("/api/admin/units").then(json<UnitInfo[]>),
   addUnit: (name: string, parent: string) => send("POST", "/api/admin/units", { name, parent }).then(json<UnitInfo>),
   editUnit: (id: string, patch: { name?: string; parent?: string }) => send("PATCH", `/api/admin/units/${id}`, patch).then(json<UnitInfo>),

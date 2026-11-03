@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { accounts, User } from "./api";
+import { accounts, can, User } from "./api";
 import { AccountChip, ChangePassword, Login } from "./components/Account";
 import AdminShell from "./components/Admin";
 import { Workspace } from "./App";
@@ -18,16 +18,16 @@ export default function Shell() {
   if (user === undefined) return <main className="auth-page"><p className="meta">Loading…</p></main>;
   if (user === null) return <Login onUser={setUser} />;
   if (user.must_change_password) return <ChangePassword user={user} forced onDone={() => void accounts.me().then(setUser)} />;
-  if (user.role === "analyst" || user.role === "officer") return <Workspace user={user} onUser={setUser} onSignOut={signOut} />;
+  if (can(user, "view")) return <Workspace user={user} onUser={setUser} onSignOut={signOut} />;
   return (
     <div className="app admin-app">
       <header className="header">
         <span className="wordmark">EnviroSense</span>
-        <nav className="crumbs" aria-label="Location"><span>{user.role === "admin" ? "Administration" : "Audit"}</span></nav>
+        <nav className="crumbs" aria-label="Location"><span>{can(user, "users") ? "Administration" : "Audit"}</span></nav>
         <div className="spacer" />
         <AccountChip user={user} onSignOut={signOut} onUser={setUser} />
       </header>
-      <AdminShell user={user} tabs={user.role === "admin" ? ["users", "units", "model", "audit"] : ["audit"]} />
+      <AdminShell user={user} tabs={can(user, "users") ? ["users", "units", "roles", "model", "audit"] : ["audit"]} />
     </div>
   );
 }

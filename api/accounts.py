@@ -44,6 +44,19 @@ class UnitEdit(BaseModel):
     parent: str | None = None
 
 
+class NewRole(BaseModel):
+    key: str
+    label: str
+    description: str = ""
+    permissions: list[str] = []
+    based_on: str | None = None
+
+
+class RolePermissions(BaseModel):
+    permissions: list[str]
+    reason: str
+
+
 class ModelApproval(BaseModel):
     model_id: str
     reason: str
@@ -169,8 +182,8 @@ def edit_user(username: str, body: UserEdit):
     _managed(rec["unit"])
     if body.unit is not None:
         _managed(body.unit)
-    if username == auth.actor() and (body.active is False or (body.role and body.role != "admin")):
-        raise HTTPException(400, "you cannot disable yourself or take away your own administrator role")
+    if username == auth.actor() and (body.active is False or (body.role and "users" not in auth.perms_of(body.role))):
+        raise HTTPException(400, "you cannot disable yourself or take away your own right to manage users")
     try:
         user = auth.update_user(username, **body.model_dump())
     except auth.AuthError as e:
@@ -189,6 +202,75 @@ def reset_password(username: str):
     auth.set_password(username, pw, True)
     audit.log("password_reset", auth.actor(), user=username)
     return {"username": username, "temporary_password": pw}
+
+
+# ---- roles and permissions (schema iam; shared by the whole organisation, so the top unit manages them) -------------
+
+def _top_only():
+    if not auth.is_top(auth.current()):
+        raise HTTPException(403, "roles are shared by the whole organisation; only an administrator of the top unit changes them")
+
+
+@router.get("/api/admin/roles")
+def get_roles():
+    return auth.list_roles()
+
+
+@router.get("/api/admin/permissions")
+def get_permissions():
+    return auth.list_permissions()
+
+
+@router.get("/api/admin/route-policy")
+def get_route_policy():
+    """Which permission each route needs (first matching rule wins). Changed by migration, not here: a new route needs a rule written with it."""
+    return auth.route_rules()
+
+
+@router.post("/api/admin/roles")
+def add_role(body: NewRole):
+    _top_only()
+    perms = list(body.permissions)
+    if body.based_on:
+        base = next((r for r in auth.list_roles() if r["key"] == body.based_on), None)
+        if base is None:
+            raise HTTPException(400, f"no role {body.based_on} to base this on")
+        perms = sorted(set(base["permissions"]) | set(perms))
+    try:
+        role = auth.create_role(body.key, body.label, body.description, perms, auth.actor())
+    except auth.AuthError as e:
+        raise HTTPException(400, str(e))
+    audit.log("role_create", auth.actor(), role=role["key"], permissions=role["permissions"], based_on=body.based_on)
+    return role
+
+
+@router.put("/api/admin/roles/{key}/permissions")
+def put_role_permissions(key: str, body: RolePermissions):
+    _top_only()
+    if len(body.reason.strip()) < 10:
+        raise HTTPException(400, "give the reason (at least 10 characters)")
+    before = next((r for r in auth.list_roles() if r["key"] == key), None)
+    if before is None:
+        raise HTTPException(404, f"no role {key}")
+    try:
+        role = auth.set_role_permissions(key, body.permissions)
+    except auth.AuthError as e:
+        raise HTTPException(400, str(e))
+    audit.log("role_permissions_change", auth.actor(), role=key, before=before["permissions"], after=role["permissions"], reason=body.reason.strip())
+    return role
+
+
+@router.delete("/api/admin/roles/{key}")
+def remove_role(key: str):
+    _top_only()
+    try:
+        auth.delete_role(key)
+    except KeyError:
+        raise HTTPException(404, f"no role {key}")
+    except auth.AuthError as e:
+        raise HTTPException(400, str(e))
+    audit.log("role_delete", auth.actor(), role=key)
+    return {"deleted": key}
 
 
 # ---- approved model -------------------------------------------------------------------------------------------

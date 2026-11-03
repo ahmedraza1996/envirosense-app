@@ -207,3 +207,11 @@ Tests: 42 pass (7 new in `tests/test_governance.py`, which also covers the appro
 - Semantic layer: damage classes, versioned metric definitions, glossary, model versions with checkpoint hash, and thresholds with history. The review confidence threshold (0.7) is now read from `sem.thresholds` and changed by an administrator with a reason (`PUT /api/admin/thresholds/review_confidence`); this settles the open point that it was a code constant.
 - Existing data imported with `scripts/db_import_files.py` (4 units, 10 users, 15 uploads, 66 assessments with 213 alerts, 6 audit entries; the hash chain verified after import). Backups: `scripts/db_backup.sh`, restore check `scripts/db_restore_check.sh`; see `docs/operations.md` for limits (backups on the same disk, no point-in-time recovery).
 - Tests: 68 run against a real PostgreSQL (`envirosense_test`), built from the migrations each run. `tests/test_database.py` covers the database rules, the job queue, geometry and the semantic layer.
+
+## A15 Roles, permissions and the route policy as data (2026-11-03)
+- Migration 0003: `iam.roles`, `iam.permissions`, `iam.role_permissions`, `iam.permission_conflicts`, `iam.route_policy`; `iam.users.role` is a foreign key to `iam.roles`. The rules that were in `auth.PERMS` and `auth.POLICY` (13 permissions, 27 route rules) are now rows with the same effect.
+- Authorization is by permission everywhere, not by role name: reviewing needs `review`, confirming or retracting needs `approve`, deleting any upload needs `delete_upload`, and the screens a user gets follow their permissions.
+- An administrator of the top unit creates custom roles (optionally based on another) and changes their permissions with a reason; each change is in the audit log. Built-in roles are fixed by the database. Separation of duties is a table: no role may hold both account management or audit reading and the permissions that handle imagery, alerts or exports.
+- Roles screen in the administration area (list, create, edit, delete, with the conflict shown before saving).
+- Not done: per-unit roles (roles are organisation-wide), time-limited grants to a single user, a second administrator co-signing a role change, sign-in through an external identity provider.
+- Tests: 75 pass; 7 new in `tests/test_database.py`.

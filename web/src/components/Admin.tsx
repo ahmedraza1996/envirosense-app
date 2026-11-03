@@ -1,14 +1,7 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
-import { accounts, ApprovedModel, AuditEntry, Role, UnitInfo, User } from "../api";
+import { accounts, ApprovedModel, AuditEntry, PermissionCatalogue, Role, RoleInfo, UnitInfo, User } from "../api";
 
 const msg = (e: unknown) => String(e).replace(/^Error: /, "");
-const ROLES: { id: Role; label: string; help: string }[] = [
-  { id: "analyst", label: "Analyst", help: "Runs assessments, uploads imagery, proposes and dismisses alerts. Cannot confirm or export." },
-  { id: "officer", label: "Approving officer", help: "Confirms alerts another person proposed, retracts, exports, deletes uploads in the unit tree." },
-  { id: "auditor", label: "Auditor", help: "Read-only: audit log and review history. No imagery, alert lists or exports." },
-  { id: "admin", label: "System administrator", help: "Manages users, units and the approved model. No access to imagery or alerts." },
-];
-
 function useLoad<T>(fn: () => Promise<T>) {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -18,7 +11,8 @@ function useLoad<T>(fn: () => Promise<T>) {
 }
 
 function Users({ me }: { me: User }) {
-  const users = useLoad(accounts.users), units = useLoad(accounts.units);
+  const users = useLoad(accounts.users), units = useLoad(accounts.units), roles = useLoad(accounts.roles);
+  const ROLES = (roles.data ?? []).map((r) => ({ id: r.key, label: r.label, help: r.description }));
   const [form, setForm] = useState({ username: "", name: "", role: "analyst" as Role, unit: "" });
   const [error, setError] = useState<string | null>(null);
   const [shown, setShown] = useState<{ who: string; pw: string } | null>(null);
@@ -39,7 +33,7 @@ function Users({ me }: { me: User }) {
         <label className="field-block"><span>Username</span><input type="text" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} /></label>
         <label className="field-block"><span>Full name</span><input type="text" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></label>
         <label className="field-block"><span>Role</span>
-          <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value as Role })}>{ROLES.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}</select></label>
+          <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>{ROLES.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}</select></label>
         <label className="field-block"><span>Unit</span>
           <select value={form.unit || me.unit} onChange={(e) => setForm({ ...form, unit: e.target.value })}>{unitList.map((u) => <option key={u.id} value={u.id}>{u.path}</option>)}</select></label>
         <button className="button primary" disabled={!form.username || !form.name}>Create user</button>
@@ -196,12 +190,73 @@ export function AuditView() {
   );
 }
 
-type Tab = "users" | "units" | "model" | "audit";
+function Roles() {
+  const roles = useLoad(accounts.roles), cat = useLoad(accounts.permissions);
+  const [error, setError] = useState<string | null>(null);
+  const [form, setForm] = useState({ key: "", label: "", description: "", based_on: "", permissions: [] as string[] });
+  const [editing, setEditing] = useState<{ key: string; permissions: string[]; reason: string } | null>(null);
+  const perms: PermissionCatalogue["permissions"] = cat.data?.permissions ?? [];
+  const conflicts = cat.data?.conflicts ?? [];
+  const clash = (held: string[]) => conflicts.find((c) => held.includes(c.a) && held.includes(c.b));
+  const run = async (fn: () => Promise<unknown>) => { setError(null); try { await fn(); roles.reload(); } catch (e) { setError(msg(e)); } };
+  const toggle = (list: string[], k: string) => (list.includes(k) ? list.filter((x) => x !== k) : [...list, k]);
+  const chips = (r: RoleInfo) => r.permissions.map((p) => <code key={p} className="chip">{p}</code>);
+  const picker = (held: string[], on: (next: string[]) => void) => (
+    <fieldset className="perm-picker">
+      {perms.map((p) => (
+        <label key={p.key} title={p.description}><input type="checkbox" checked={held.includes(p.key)} onChange={() => on(toggle(held, p.key))} /> <code>{p.key}</code> <span className="meta">{p.description}</span></label>
+      ))}
+      {clash(held) && <p className="meta error-text" role="alert">A role cannot hold both {clash(held)!.a} and {clash(held)!.b}: {clash(held)!.reason}.</p>}
+    </fieldset>
+  );
+  return (
+    <>
+      <h2>Roles ({roles.data?.length ?? 0})</h2>
+      <p className="meta">A role is a set of permissions. The four built-in roles are fixed; to change what someone may do, create a role (optionally based on an existing one) and give it to them under Users.</p>
+      {error && <p className="meta error-text" role="alert">{error}</p>}
+      <table>
+        <thead><tr><th>Role</th><th>Permissions</th><th>Users</th><th /></tr></thead>
+        <tbody>
+          {(roles.data ?? []).map((r) => (
+            <tr key={r.key}>
+              <td><strong>{r.label}</strong>{r.builtin && <span className="meta"> built-in</span>}<br /><span className="scene-id">{r.key}</span></td>
+              <td>{editing?.key === r.key ? (
+                <>{picker(editing.permissions, (permissions) => setEditing({ ...editing, permissions }))}
+                  <label className="field-block"><span>Reason for the change</span><input type="text" value={editing.reason} onChange={(e) => setEditing({ ...editing, reason: e.target.value })} /></label></>
+              ) : chips(r)}</td>
+              <td>{r.users}</td>
+              <td>{!r.builtin && (editing?.key === r.key ? (
+                <><button className="button primary" disabled={editing.reason.trim().length < 10 || !!clash(editing.permissions)}
+                  onClick={() => void run(async () => { await accounts.setRolePermissions(r.key, editing.permissions, editing.reason); setEditing(null); })}>Save</button>
+                  <button className="button" onClick={() => setEditing(null)}>Cancel</button></>
+              ) : (
+                <><button className="button" onClick={() => setEditing({ key: r.key, permissions: r.permissions, reason: "" })}>Edit</button>
+                  <button className="button" disabled={r.users > 0} title={r.users > 0 ? "Users still hold this role" : ""} onClick={() => void run(() => accounts.deleteRole(r.key))}>Delete</button></>
+              ))}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <h2>Create a role</h2>
+      <form className="admin-form" onSubmit={(e: FormEvent) => { e.preventDefault(); void run(async () => { await accounts.addRole({ ...form, based_on: form.based_on || undefined }); setForm({ key: "", label: "", description: "", based_on: "", permissions: [] }); }); }}>
+        <label className="field-block"><span>Key (letters, digits, underscore)</span><input type="text" value={form.key} onChange={(e) => setForm({ ...form, key: e.target.value })} /></label>
+        <label className="field-block"><span>Name</span><input type="text" value={form.label} onChange={(e) => setForm({ ...form, label: e.target.value })} /></label>
+        <label className="field-block"><span>Based on</span>
+          <select value={form.based_on} onChange={(e) => setForm({ ...form, based_on: e.target.value })}><option value="">Nothing (start empty)</option>{(roles.data ?? []).map((r) => <option key={r.key} value={r.key}>{r.label}</option>)}</select></label>
+        <label className="field-block"><span>Description</span><input type="text" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></label>
+        <div className="field-block">{picker(form.permissions, (permissions) => setForm({ ...form, permissions }))}</div>
+        <button className="button primary" disabled={!form.key || !form.label || !!clash(form.permissions)}>Create role</button>
+      </form>
+    </>
+  );
+}
+
+type Tab = "users" | "units" | "roles" | "model" | "audit";
 
 /** Administrator and auditor screens (no imagery): users, units, approved model, audit log. */
 export default function AdminShell({ user, tabs }: { user: User; tabs: Tab[] }) {
   const [tab, setTab] = useState<Tab>(tabs[0]);
-  const label: Record<Tab, string> = { users: "Users", units: "Units", model: "Approved model", audit: "Audit log" };
+  const label: Record<Tab, string> = { users: "Users", units: "Units", roles: "Roles", model: "Approved model", audit: "Audit log" };
   return (
     <div className="admin-body">
       <div className="admin-tabs">
@@ -212,6 +267,7 @@ export default function AdminShell({ user, tabs }: { user: User; tabs: Tab[] }) 
       <main className="admin-page">
         {tab === "users" && <Users me={user} />}
         {tab === "units" && <Units />}
+        {tab === "roles" && <Roles />}
         {tab === "model" && <ModelApproval />}
         {tab === "audit" && <AuditView />}
       </main>
