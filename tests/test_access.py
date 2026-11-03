@@ -173,3 +173,24 @@ def test_roles_hold_the_expected_permissions():
     assert not (p["admin"] & {"view", "review", "approve", "export", "assess", "upload"})
     assert not (p["auditor"] & {"view", "review", "approve", "export", "assess", "upload", "users"})
     assert reviews.STATUSES.index("proposed") < reviews.STATUSES.index("confirmed")
+
+
+def test_resetting_demo_passwords_shows_them_once_and_leaves_no_plain_text_behind(capsys):
+    from app.scripts import reset_demo_passwords
+    top = next(iter(auth.units()))
+    auth.create_user("fresh.user", "Fresh User", "analyst", top, "Temporary-pass-1", "t", must_change=True)
+    auth.create_user("settled.user", "Settled User", "analyst", top, "Chosen-pass-123", "t", must_change=False)
+    (auth.DIR).mkdir(parents=True, exist_ok=True)
+    (auth.DIR / "demo_accounts.txt").write_text("fresh.user Temporary-pass-1\n")
+    (auth.DIR / "first_admin.txt").write_text("user: admin\npassword: whatever\n")
+    assert reset_demo_passwords.main() == 0
+    out = capsys.readouterr().out
+    new_pw = next(l.split()[-1] for l in out.splitlines() if l.strip().startswith("fresh.user"))
+    assert "settled.user" not in out                                                      # an account whose owner chose a password is left alone
+    assert not (auth.DIR / "demo_accounts.txt").exists() and not (auth.DIR / "first_admin.txt").exists()
+    with pytest.raises(auth.AuthError):
+        auth.login("fresh.user", "Temporary-pass-1")                                      # the old handout no longer works
+    assert auth.login("fresh.user", new_pw)[0]["must_change_password"]                    # the new one does, and must be changed
+    assert auth.login("settled.user", "Chosen-pass-123")
+    assert new_pw not in auth.get_user("fresh.user")["pw"]                                # stored as a hash
+    assert "fresh.user" in {e["detail"]["user"] for e in audit.read(limit=20) if e["action"] == "password_reset"}      # each reset is in the audit log
