@@ -27,7 +27,7 @@ export default function Shell() {
         <div className="spacer" />
         <AccountChip user={user} onSignOut={signOut} onUser={setUser} />
       </header>
-      <AdminShell user={user} tabs={can(user, "users") ? ["users", "units", "roles", "model", "audit"] : ["audit"]} />
+      <AdminShell user={user} tabs={can(user, "users") ? ["users", "units", "roles", "approvals", "model", "audit"] : ["audit"]} />
     </div>
   );
 }

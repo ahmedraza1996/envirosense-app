@@ -214,7 +214,12 @@ export interface PermissionInfo { key: string; description: string; sensitive: b
 export interface PermissionCatalogue { permissions: PermissionInfo[]; conflicts: { a: string; b: string; reason: string }[] }
 export interface UnitInfo { id: string; name: string; parent: string | null; path: string; users: number }
 export interface AuditEntry { seq: number; utc: string; action: string; actor: string; assessment: string | null; detail: Record<string, unknown> }
-export interface ApprovedModel { default_model: string | null; approved_utc?: string; approved_by?: string; reason?: string; previous?: string | null; available?: { id: string; label: string }[] }
+export interface ApprovalOutcome { status: "pending" | "applied"; id: number; approvers: number }
+export interface ApprovalRequest {
+  id: number; kind: string; subject: string; payload: Record<string, unknown>; state: string; requested_by: string; decided_by: string | null; decision_note: string | null;
+  self_approved: boolean; requested_utc: string; expires_utc: string; decided_utc: string | null; description: string; can_decide: boolean; can_withdraw: boolean;
+}
+export interface ApprovedModel { approval?: ApprovalOutcome; default_model: string | null; approved_utc?: string; approved_by?: string; reason?: string; previous?: string | null; available?: { id: string; label: string }[] }
 export const can = (u: User, perm: string) => u.permissions.includes(perm);
 
 const send = (method: string, url: string, body?: unknown) =>
@@ -232,7 +237,10 @@ export const accounts = {
   roles: () => fetch("/api/admin/roles").then(json<RoleInfo[]>),
   permissions: () => fetch("/api/admin/permissions").then(json<PermissionCatalogue>),
   addRole: (r: { key: string; label: string; description: string; permissions: string[]; based_on?: string }) => send("POST", "/api/admin/roles", r).then(json<RoleInfo>),
-  setRolePermissions: (key: string, permissions: string[], reason: string) => send("PUT", `/api/admin/roles/${key}/permissions`, { permissions, reason }).then(json<RoleInfo>),
+  setRolePermissions: (key: string, permissions: string[], reason: string) => send("PUT", `/api/admin/roles/${key}/permissions`, { permissions, reason }).then(json<{ approval: ApprovalOutcome }>),
+  approvals: (state?: string) => fetch(`/api/approvals${state ? `?state=${state}` : ""}`).then(json<ApprovalRequest[]>),
+  decideApproval: (id: number, approve: boolean, note: string) => send("POST", `/api/approvals/${id}/${approve ? "approve" : "reject"}`, { note }).then(json<ApprovalRequest>),
+  withdrawApproval: (id: number) => send("POST", `/api/approvals/${id}/withdraw`).then(json<ApprovalRequest>),
   deleteRole: (key: string) => send("DELETE", `/api/admin/roles/${key}`).then(json<{ deleted: string }>),
   units: () => fetch("/api/admin/units").then(json<UnitInfo[]>),
   addUnit: (name: string, parent: string) => send("POST", "/api/admin/units", { name, parent }).then(json<UnitInfo>),

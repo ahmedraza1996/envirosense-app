@@ -11,13 +11,13 @@ from alembic import command
 from alembic.config import Config
 from starlette.testclient import TestClient
 
-from app.api import accounts, auth, engines, uploads
+from app.api import approvals, auth, engines, uploads
 from app.db import engine as dbe
 from app.db import semantic
 
 APP = Path(__file__).resolve().parents[1]
 RESET = ("audit.log, iam.sessions, iam.login_throttle, iam.users, iam.units, ingest.job_steps, ingest.jobs, ingest.uploads, "
-         "core.alerts, core.assessments, wf.alert_review_events, wf.alert_reviews, sem.model_versions")
+         "core.alerts, core.assessments, wf.alert_review_events, wf.alert_reviews, wf.approval_requests, sem.model_versions")
 
 
 def migrate(target="head"):
@@ -55,7 +55,7 @@ def _isolated_state(tmp_path, monkeypatch):
     approved = tmp_path / "approved_model.json"
     approved.write_text('{"default_model": "unet_paired_mis", "approved_by": "seed (test)", "reason": "test seed"}')
     monkeypatch.setattr(engines, "APPROVED", approved)
-    monkeypatch.setattr(accounts, "DECISION_LOG", tmp_path / "decision_log.md")
+    monkeypatch.setattr(approvals, "DECISION_LOG", tmp_path / "decision_log.md")
     models = engines.discover_models()
     models.setdefault("unet_paired_mis", {"label": "Paired U-Net (misalignment)", "kind": "unet"})
     semantic.sync_models(models, approved)
@@ -70,6 +70,13 @@ def _isolated_state(tmp_path, monkeypatch):
             kw["headers"] = {**(kw.get("headers") or {}), "Authorization": f"Bearer {token}"}
         return real(self, method, url, **kw)
     monkeypatch.setattr(TestClient, "request", request)
+
+
+def only_admin(username):
+    """Make `username` the one active administrator, so a sensitive change is made at once (nobody else could approve it)."""
+    for name, rec in auth.users().items():
+        if rec["role"] == "admin" and name != username and rec["active"]:
+            auth.update_user(name, active=False)
 
 
 @pytest.fixture()

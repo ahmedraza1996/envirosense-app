@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from app.api import audit, auth, reviews, service, uploads
 from app.db import semantic
 from app.api.main import app
+from app.tests.conftest import only_admin
 from app.tests.test_features import stored  # noqa: F401  (fixture: a stored area assessment with three alerts)
 
 c = TestClient(app)
@@ -150,6 +151,7 @@ def test_only_an_administrator_changes_the_approved_model_and_it_is_logged(tmp_p
     monkeypatch.setattr(service, "models", lambda: {"unet_a": {"kind": "unet"}, "unet_b": {"kind": "unet"}, "clf": {"kind": "classifier"}})
     top = next(iter(auth.units()))
     adm, ana = mk("model_admin", "admin", top), mk("model_analyst", "analyst", top)
+    only_admin("model_admin")                                                                       # nobody else could approve: the change is made at once
     body = {"model_id": "unet_b", "reason": "ablation shows the gain is from augmentation"}
     assert c.put("/api/admin/approved-model", headers=ana, json=body).status_code == 403
     assert c.put("/api/admin/approved-model", headers=adm, json={**body, "reason": "short"}).status_code == 400

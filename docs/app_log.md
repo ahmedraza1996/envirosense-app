@@ -215,3 +215,10 @@ Tests: 42 pass (7 new in `tests/test_governance.py`, which also covers the appro
 - Roles screen in the administration area (list, create, edit, delete, with the conflict shown before saving).
 - Not done: per-unit roles (roles are organisation-wide), time-limited grants to a single user, a second administrator co-signing a role change, sign-in through an external identity provider.
 - Tests: 75 pass; 7 new in `tests/test_database.py`.
+
+## A16 Approval requests: co-signed changes (2026-11-03)
+- Migration 0004: `wf.approval_policy` and `wf.approval_requests`. Changing the approved model, the review threshold or a custom role's permissions is now a request that a different eligible administrator approves; the change is made in the same transaction as the approval (`api/approvals.py`).
+- The database holds the rules: decider is not the requester (unless nobody else is eligible, checked by a trigger), a decided request cannot be edited, a rejection needs a reason, one pending request per subject. Requests expire after 7 days. A request is dry-run when filed, so an impossible change is refused at once; one that stops applying fails and changes nothing.
+- Approvals screen (pending with approve / reject / withdraw, and the decided history). The model and role screens say when a change is waiting for approval.
+- With one administrator the change is made at once and recorded as self-approved. Not done: approving a request by more than one person, a request for exports, notification of approvers (they see requests when they open the screen).
+- Tests: 82 pass (7 new in `tests/test_approvals.py`).

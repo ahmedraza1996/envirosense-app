@@ -14,7 +14,7 @@ import threading
 import time
 from pathlib import Path
 
-from .engine import one, rows, run, tx
+from .engine import one, rows, run, tx, using
 
 _hash_cache: dict = {}
 _threshold_cache: dict = {}
@@ -86,13 +86,13 @@ def threshold_history(key: str) -> list:
                        "FROM sem.thresholds WHERE key = :k ORDER BY effective_from DESC, id DESC", k=key)
 
 
-def set_threshold(key: str, value: float, by: str, decision_ref: str, note: str = "") -> None:
+def set_threshold(key: str, value: float, by: str, decision_ref: str, note: str = "", c=None) -> None:
     if key not in DEFAULTS:
         raise ValueError(f"unknown threshold {key}")
     if not 0 < value < 1:
         raise ValueError("the review confidence must be between 0 and 1")
-    with tx() as c:
-        run(c, "INSERT INTO sem.thresholds (key, value, set_by, decision_ref, note) VALUES (:k, :v, :b, :d, :n)", k=key, v=value, b=by, d=decision_ref, n=note)
+    with using(c) as conn:
+        run(conn, "INSERT INTO sem.thresholds (key, value, set_by, decision_ref, note) VALUES (:k, :v, :b, :d, :n)", k=key, v=value, b=by, d=decision_ref, n=note)
     _threshold_cache.pop(key, None)
 
 
@@ -135,16 +135,17 @@ def approved_id() -> str | None:
     return approved_model().get("default_model")
 
 
-def approve_model(model_id: str, by: str, reason: str, decision_ref: str = "governance/decision_log.md") -> dict:
-    with tx() as c:
-        run(c, "SELECT pg_advisory_xact_lock(727003)")
-        if not one(c, "SELECT 1 AS x FROM sem.model_versions WHERE id = :i", i=model_id):
+def approve_model(model_id: str, by: str, reason: str, decision_ref: str = "governance/decision_log.md", c=None) -> dict | None:
+    """Make a model version the approved default. With `c` the change joins the caller's transaction (and nothing is returned until it commits)."""
+    with using(c) as conn:
+        run(conn, "SELECT pg_advisory_xact_lock(727003)")
+        if not one(conn, "SELECT 1 AS x FROM sem.model_versions WHERE id = :i", i=model_id):
             raise KeyError(model_id)
-        old = one(c, "SELECT id FROM sem.model_versions WHERE status = 'approved'")
-        run(c, "UPDATE sem.model_versions SET status = 'candidate' WHERE status = 'approved'")
-        run(c, "UPDATE sem.model_versions SET status = 'approved', approved_by = :b, approved_at = now(), approval_reason = :r, previous_model = :p, decision_ref = :d WHERE id = :i",
+        old = one(conn, "SELECT id FROM sem.model_versions WHERE status = 'approved'")
+        run(conn, "UPDATE sem.model_versions SET status = 'candidate' WHERE status = 'approved'")
+        run(conn, "UPDATE sem.model_versions SET status = 'approved', approved_by = :b, approved_at = now(), approval_reason = :r, previous_model = :p, decision_ref = :d WHERE id = :i",
             i=model_id, b=by, r=reason, p=old["id"] if old else None, d=decision_ref)
-    return approved_model()
+    return approved_model() if c is None else None
 
 
 def model_versions() -> list:

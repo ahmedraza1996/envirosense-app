@@ -46,3 +46,13 @@ def dispose():
         for e in _engines.values():
             e.dispose()
         _engines.clear()
+
+
+@contextmanager
+def using(c=None, role: str = "app"):
+    """Use the given connection (so a change joins the caller's transaction), or open a transaction of its own."""
+    if c is not None:
+        yield c
+    else:
+        with tx(role) as conn:
+            yield conn

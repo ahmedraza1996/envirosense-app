@@ -11,6 +11,7 @@ from app.api import auth, registry, reviews, uploads
 from app.api.main import app
 from app.db import engine as dbe
 from app.db import semantic
+from app.tests.conftest import only_admin
 from app.tests.test_governance import _rec
 
 c = TestClient(app)
@@ -194,6 +195,7 @@ def test_semantic_layer_serves_definitions_and_a_changed_threshold_is_versioned_
     assert c.get("/api/semantic/thresholds").json()[0]["value"] == 0.7
     ana = {"Authorization": f"Bearer {auth.make_token(_user('sem_analyst', 'analyst'))}"}
     adm = {"Authorization": f"Bearer {auth.make_token(_user('sem_admin', 'admin'))}"}
+    only_admin("sem_admin")
     body = {"value": 0.65, "reason": "reviewers ask for more structures to look at"}
     assert c.put("/api/admin/thresholds/review_confidence", headers=ana, json=body).status_code == 403
     assert c.put("/api/admin/thresholds/review_confidence", headers=adm, json={**body, "reason": "no"}).status_code == 400
@@ -229,8 +231,10 @@ def _user(name, role):
 
 # ---- roles, permissions, route policy as data ------------------------------------------------------------------
 
-def _admin_headers(name="roles_admin", unit=None):
+def _admin_headers(name="roles_admin", unit=None, sole=True):
     auth.create_user(name, name, "admin", unit or next(iter(auth.units())), "Passw0rd-long-1", "t", must_change=False)
+    if sole:
+        only_admin(name)
     return {"Authorization": f"Bearer {auth.make_token(name)}"}
 
 
@@ -241,7 +245,7 @@ def test_built_in_roles_and_the_route_policy_are_rows_with_the_rights_they_alway
     assert auth.perms_of("officer") == auth.perms_of("analyst") | {"approve", "export", "delete_upload"}
     assert auth.required("GET", "/api/health") == "public" and auth.required("DELETE", "/api/uploads/upl_00000001") == "delete_own_upload"
     assert auth.required("GET", "/api/not-a-route") is None
-    assert sql("SELECT count(*) AS n FROM iam.route_policy") == [{"n": 27}]
+    assert sql("SELECT count(*) AS n FROM iam.route_policy") == [{"n": 29}]
 
 
 def test_an_administrator_creates_a_role_and_a_user_holding_it_gets_exactly_those_rights():
@@ -309,7 +313,7 @@ def test_a_role_that_users_hold_cannot_be_deleted_and_only_the_top_unit_manages_
     auth.create_role("temp_role", "Temporary", "", ["view"], "t")
     auth.create_user("holder", "Holder", "temp_role", sub, "Passw0rd-long-1", "t", must_change=False)
     assert c.delete("/api/admin/roles/temp_role", headers=adm).status_code == 400
-    sub_adm = _admin_headers("regional_admin", sub)
+    sub_adm = _admin_headers("regional_admin", sub, sole=False)
     assert c.post("/api/admin/roles", headers=sub_adm, json={"key": "x_role", "label": "X role"}).status_code == 403         # a unit's administrator manages users, not shared roles
     assert c.get("/api/admin/roles", headers=sub_adm).status_code == 200                                                       # but may read them to assign them
     auth.update_user("holder", role="analyst")

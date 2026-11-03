@@ -29,7 +29,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import exc as sa_exc
 
-from ..db.engine import one, rows, run, tx
+from ..db.engine import one, rows, run, tx, using
 from .engines import ROOT
 
 DIR = ROOT / "runs" / "app" / "auth"
@@ -361,21 +361,22 @@ def create_role(key: str, label: str, description: str, permissions: list, by: s
     return next(r for r in list_roles() if r["key"] == key)
 
 
-def set_role_permissions(key: str, permissions: list) -> dict:
+def set_role_permissions(key: str, permissions: list, c=None) -> dict | None:
+    """Replace a custom role's permissions. With `c` the change joins the caller's transaction (nothing is returned until it commits)."""
     perms = sorted(set(permissions or []))
     try:
-        with tx() as c:
-            if not one(c, "SELECT 1 AS x FROM iam.roles WHERE key = :k FOR UPDATE", k=key):
+        with using(c) as conn:
+            if not one(conn, "SELECT 1 AS x FROM iam.roles WHERE key = :k FOR UPDATE", k=key):
                 raise KeyError(key)
-            run(c, "DELETE FROM iam.role_permissions WHERE role_key = :k", k=key)
+            run(conn, "DELETE FROM iam.role_permissions WHERE role_key = :k", k=key)
             for p in perms:
-                run(c, "INSERT INTO iam.role_permissions (role_key, permission_key) VALUES (:r, :p)", r=key, p=p)
+                run(conn, "INSERT INTO iam.role_permissions (role_key, permission_key) VALUES (:r, :p)", r=key, p=p)
     except sa_exc.IntegrityError as e:
         raise _role_refused(e, "a permission is unknown") from e
     except sa_exc.InternalError as e:
         raise _role_refused(e, "that change is not allowed") from e
     invalidate_roles()
-    return next(r for r in list_roles() if r["key"] == key)
+    return next(r for r in list_roles() if r["key"] == key) if c is None else None
 
 
 def delete_role(key: str) -> None:

@@ -1,5 +1,5 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
-import { accounts, ApprovedModel, AuditEntry, PermissionCatalogue, Role, RoleInfo, UnitInfo, User } from "../api";
+import { accounts, ApprovalOutcome, ApprovalRequest, ApprovedModel, AuditEntry, PermissionCatalogue, Role, RoleInfo, UnitInfo, User } from "../api";
 
 const msg = (e: unknown) => String(e).replace(/^Error: /, "");
 function useLoad<T>(fn: () => Promise<T>) {
@@ -114,18 +114,18 @@ function ModelApproval() {
   const [pick, setPick] = useState("");
   const [reason, setReason] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [done, setDone] = useState(false);
+  const [done, setDone] = useState<ApprovalOutcome | null>(null);
   const available = cur.data?.available ?? [];
   const sel = pick || cur.data?.default_model || "";
   const save = async () => {
     setError(null);
-    setDone(false);
-    try { await accounts.approveModel(sel, reason); setReason(""); setDone(true); cur.reload(); } catch (e) { setError(msg(e)); }
+    setDone(null);
+    try { const r = await accounts.approveModel(sel, reason); setReason(""); setDone(r.approval ?? null); cur.reload(); } catch (e) { setError(msg(e)); }
   };
   return (
     <>
       <h2>Approved default model</h2>
-      <p className="meta">The model used for area alerts and uploads. It is chosen by approval, never by test score. A change is written to the audit log and to the decision log with your reason.</p>
+      <p className="meta">The model used for area alerts and uploads. It is chosen by approval, never by test score. A change needs a second administrator to approve it (unless you are the only one); it is written to the audit log and to the decision log with your reason.</p>
       {cur.data && (
         <dl className="stats">
           <dt>Current</dt><dd>{available.find((m) => m.id === cur.data!.default_model)?.label ?? cur.data.default_model ?? "none"}</dd>
@@ -138,10 +138,10 @@ function ModelApproval() {
           <select value={sel} onChange={(e) => setPick(e.target.value)}>{available.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}</select></label>
         <label className="field-block wide"><span>Reason (recorded)</span>
           <input type="text" value={reason} placeholder="Evidence for the change, e.g. experiment and result" onChange={(e) => setReason(e.target.value)} /></label>
-        <button className="button primary" disabled={sel === cur.data?.default_model || reason.trim().length < 10} onClick={() => void save()}>Approve change</button>
+        <button className="button primary" disabled={sel === cur.data?.default_model || reason.trim().length < 10} onClick={() => void save()}>Submit change</button>
       </div>
       {error && <p className="meta error-text" role="alert">{error}</p>}
-      {done && <p className="notice">Default model changed and recorded.</p>}
+      {done && <p className="notice">{done.status === "pending" ? `Request ${done.id} filed. Another administrator must approve it before the default changes (see Approvals).` : "Default model changed and recorded."}</p>}
     </>
   );
 }
@@ -193,6 +193,7 @@ export function AuditView() {
 function Roles() {
   const roles = useLoad(accounts.roles), cat = useLoad(accounts.permissions);
   const [error, setError] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
   const [form, setForm] = useState({ key: "", label: "", description: "", based_on: "", permissions: [] as string[] });
   const [editing, setEditing] = useState<{ key: string; permissions: string[]; reason: string } | null>(null);
   const perms: PermissionCatalogue["permissions"] = cat.data?.permissions ?? [];
@@ -214,6 +215,7 @@ function Roles() {
       <h2>Roles ({roles.data?.length ?? 0})</h2>
       <p className="meta">A role is a set of permissions. The four built-in roles are fixed; to change what someone may do, create a role (optionally based on an existing one) and give it to them under Users.</p>
       {error && <p className="meta error-text" role="alert">{error}</p>}
+      {note && <p className="notice">{note}</p>}
       <table>
         <thead><tr><th>Role</th><th>Permissions</th><th>Users</th><th /></tr></thead>
         <tbody>
@@ -227,7 +229,7 @@ function Roles() {
               <td>{r.users}</td>
               <td>{!r.builtin && (editing?.key === r.key ? (
                 <><button className="button primary" disabled={editing.reason.trim().length < 10 || !!clash(editing.permissions)}
-                  onClick={() => void run(async () => { await accounts.setRolePermissions(r.key, editing.permissions, editing.reason); setEditing(null); })}>Save</button>
+                  onClick={() => void run(async () => { const res = await accounts.setRolePermissions(r.key, editing.permissions, editing.reason); setEditing(null); setNote(res.approval.status === "pending" ? `Request ${res.approval.id} filed for role ${r.key}: another administrator must approve it (see Approvals).` : `Role ${r.key} updated.`); })}>Save</button>
                   <button className="button" onClick={() => setEditing(null)}>Cancel</button></>
               ) : (
                 <><button className="button" onClick={() => setEditing({ key: r.key, permissions: r.permissions, reason: "" })}>Edit</button>
@@ -251,12 +253,61 @@ function Roles() {
   );
 }
 
-type Tab = "users" | "units" | "roles" | "model" | "audit";
+function Approvals({ me }: { me: User }) {
+  const list = useLoad(() => accounts.approvals());
+  const [error, setError] = useState<string | null>(null);
+  const [notes, setNotes] = useState<Record<number, string>>({});
+  const run = async (fn: () => Promise<unknown>) => { setError(null); try { await fn(); list.reload(); } catch (e) { setError(msg(e)); } };
+  const what = (r: ApprovalRequest) => {
+    const p = r.payload as { reason?: string; value?: number; permissions?: string[]; model_id?: string };
+    const change = r.kind === "model_approval" ? `default model to ${r.subject}` : r.kind === "threshold_change" ? `${r.subject} to ${p.value}` : `permissions of role ${r.subject} to ${(p.permissions ?? []).join(", ") || "none"}`;
+    return <><strong>{change}</strong><br /><span className="meta">{p.reason}</span></>;
+  };
+  const rows = list.data ?? [];
+  const pending = rows.filter((r) => r.state === "pending");
+  return (
+    <>
+      <h2>Waiting for a decision ({pending.length})</h2>
+      <p className="meta">A change to the default model, a threshold or a custom role's permissions takes effect only when someone other than the person who asked approves it. Requests nobody decides expire.</p>
+      {error && <p className="meta error-text" role="alert">{error}</p>}
+      <table>
+        <thead><tr><th>Change</th><th>Asked by</th><th>Filed</th><th /></tr></thead>
+        <tbody>
+          {pending.length === 0 && <tr><td colSpan={4} className="meta">Nothing is waiting.</td></tr>}
+          {pending.map((r) => (
+            <tr key={r.id}>
+              <td>{what(r)}</td><td>{r.requested_by}{r.requested_by === me.username ? " (you)" : ""}</td><td>{r.requested_utc}<br /><span className="meta">expires {r.expires_utc}</span></td>
+              <td>
+                {r.can_decide && (<>
+                  <input type="text" placeholder="Note (required to reject)" aria-label={`Note for request ${r.id}`} value={notes[r.id] ?? ""} onChange={(e) => setNotes({ ...notes, [r.id]: e.target.value })} />
+                  <button className="button primary" onClick={() => void run(() => accounts.decideApproval(r.id, true, notes[r.id] ?? ""))}>Approve</button>
+                  <button className="button" disabled={(notes[r.id] ?? "").trim().length < 5} onClick={() => void run(() => accounts.decideApproval(r.id, false, notes[r.id] ?? ""))}>Reject</button></>)}
+                {r.can_withdraw && <button className="button" onClick={() => void run(() => accounts.withdrawApproval(r.id))}>Withdraw</button>}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <h2>Decided</h2>
+      <table>
+        <thead><tr><th>Change</th><th>Result</th><th>Asked by</th><th>Decided by</th></tr></thead>
+        <tbody>
+          {rows.filter((r) => r.state !== "pending").map((r) => (
+            <tr key={r.id}><td>{what(r)}</td><td>{r.state}{r.self_approved ? " (only eligible approver)" : ""}<br /><span className="meta">{r.decided_utc}</span></td><td>{r.requested_by}</td>
+              <td>{r.decided_by ?? "–"}{r.decision_note && <><br /><span className="meta">{r.decision_note}</span></>}</td></tr>
+          ))}
+        </tbody>
+      </table>
+    </>
+  );
+}
+
+type Tab = "users" | "units" | "roles" | "approvals" | "model" | "audit";
 
 /** Administrator and auditor screens (no imagery): users, units, approved model, audit log. */
 export default function AdminShell({ user, tabs }: { user: User; tabs: Tab[] }) {
   const [tab, setTab] = useState<Tab>(tabs[0]);
-  const label: Record<Tab, string> = { users: "Users", units: "Units", roles: "Roles", model: "Approved model", audit: "Audit log" };
+  const label: Record<Tab, string> = { users: "Users", units: "Units", roles: "Roles", approvals: "Approvals", model: "Approved model", audit: "Audit log" };
   return (
     <div className="admin-body">
       <div className="admin-tabs">
@@ -268,6 +319,7 @@ export default function AdminShell({ user, tabs }: { user: User; tabs: Tab[] }) 
         {tab === "users" && <Users me={user} />}
         {tab === "units" && <Units />}
         {tab === "roles" && <Roles />}
+        {tab === "approvals" && <Approvals me={user} />}
         {tab === "model" && <ModelApproval />}
         {tab === "audit" && <AuditView />}
       </main>

@@ -2,9 +2,11 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from fastapi.responses import JSONResponse
+
 from ..db import semantic
 from ..db.engine import rows, tx
-from . import audit, auth
+from . import accounts, approvals, auth
 
 router = APIRouter()
 
@@ -52,13 +54,46 @@ def put_threshold(key: str, body: ThresholdChange):
     """Change a threshold that alters what the application flags. Kept with who, when and why; recorded in the audit log."""
     if len(body.reason.strip()) < 10:
         raise HTTPException(400, "give the reason (at least 10 characters)")
-    old = semantic.threshold(key) if key in semantic.DEFAULTS else None
+    if key not in semantic.DEFAULTS:
+        raise HTTPException(400, f"unknown threshold {key}")
+    res = accounts.submit_request("threshold_change", key, {"value": body.value, "reason": body.reason.strip()})
+    if res["status"] == "pending":
+        return JSONResponse(status_code=202, content={"approval": res, "thresholds": semantic.thresholds()})
+    return {"approval": res, "thresholds": semantic.thresholds()}
+
+
+class Decision(BaseModel):
+    note: str = ""
+
+
+def _call(fn, *a):
     try:
-        semantic.set_threshold(key, body.value, auth.actor(), "governance/decision_log.md", body.reason.strip())
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    audit.log("threshold_change", auth.actor(), key=key, previous=old, value=body.value, reason=body.reason.strip())
-    return semantic.thresholds()
+        return fn(*a)
+    except approvals.ApprovalError as e:
+        raise HTTPException(e.status, str(e))
+    except KeyError:
+        raise HTTPException(404, "no such request")
+
+
+@router.get("/api/approvals")
+def get_approvals(state: str | None = None, limit: int = 100):
+    """Requests the signed-in user filed, and those they may decide (the permission the kind needs is in each row)."""
+    return approvals.list_requests(auth.current(), state, limit)
+
+
+@router.post("/api/approvals/{rid}/approve")
+def approve_request(rid: int, body: Decision):
+    return _call(approvals.decide, rid, auth.current(), True, body.note)
+
+
+@router.post("/api/approvals/{rid}/reject")
+def reject_request(rid: int, body: Decision):
+    return _call(approvals.decide, rid, auth.current(), False, body.note)
+
+
+@router.post("/api/approvals/{rid}/withdraw")
+def withdraw_request(rid: int):
+    return _call(approvals.withdraw, rid, auth.current())
 
 
 @router.get("/api/jobs")

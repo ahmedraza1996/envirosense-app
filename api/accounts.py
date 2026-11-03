@@ -2,11 +2,12 @@
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel
 
+from fastapi.responses import JSONResponse
+
 from ..db import semantic
-from . import audit, auth, engines, service
+from . import approvals, audit, auth, service
 
 router = APIRouter()
-DECISION_LOG = engines.APPROVED.parent / "decision_log.md"
 
 
 class Login(BaseModel):
@@ -249,15 +250,15 @@ def put_role_permissions(key: str, body: RolePermissions):
     _top_only()
     if len(body.reason.strip()) < 10:
         raise HTTPException(400, "give the reason (at least 10 characters)")
-    before = next((r for r in auth.list_roles() if r["key"] == key), None)
-    if before is None:
+    role = next((r for r in auth.list_roles() if r["key"] == key), None)
+    if role is None:
         raise HTTPException(404, f"no role {key}")
-    try:
-        role = auth.set_role_permissions(key, body.permissions)
-    except auth.AuthError as e:
-        raise HTTPException(400, str(e))
-    audit.log("role_permissions_change", auth.actor(), role=key, before=before["permissions"], after=role["permissions"], reason=body.reason.strip())
-    return role
+    if role["builtin"]:
+        raise HTTPException(400, "the permissions of a built-in role cannot be changed; create a role based on it")
+    res = submit_request("role_permissions", key, {"permissions": body.permissions, "reason": body.reason.strip()})
+    if res["status"] == "pending":
+        return JSONResponse(status_code=202, content={"approval": res})
+    return {**next(r for r in auth.list_roles() if r["key"] == key), "approval": res}
 
 
 @router.delete("/api/admin/roles/{key}")
@@ -280,22 +281,30 @@ def approved_model():
     return {**semantic.approved_model(), "available": [{"id": k, "label": m.get("label", k)} for k, m in service.models().items() if m.get("kind") == "unet"]}
 
 
+def submit_request(kind: str, subject: str, payload: dict) -> dict:
+    """File an approval request for the signed-in user; the change is made at once only when nobody else may approve it (see api/approvals.py)."""
+    try:
+        return approvals.submit(kind, subject, payload, auth.current())
+    except approvals.ApprovalError as e:
+        raise HTTPException(e.status, str(e))
+    except auth.AuthError as e:
+        raise HTTPException(400, str(e))
+    except (KeyError, ValueError) as e:
+        raise HTTPException(400, f"cannot make this change: {e}")
+
+
 @router.put("/api/admin/approved-model")
 def approve_model(body: ModelApproval):
-    """Change the default model: recorded in sem.model_versions (one approved row at a time), in the audit log and, as a new row, in governance/decision_log.md."""
+    """Request a change of the default model. When another administrator may approve it, it waits for them; otherwise it is made at once. Recorded in
+    sem.model_versions (one approved row at a time), the audit log and, as a new row, governance/decision_log.md."""
     models = service.models()
     reason = body.reason.strip()
     if body.model_id not in models or models[body.model_id]["kind"] != "unet":
         raise HTTPException(400, "the default must be an available full-image U-Net model")
     if len(reason) < 10:
         raise HTTPException(400, "give the reason (at least 10 characters)")
-    old = semantic.approved_id()
-    me = auth.current()
-    day = auth.now()[:10]
     semantic.sync_models(models)
-    semantic.approve_model(body.model_id, f"{me['username']} ({me['name']})", reason)
-    row = f"| {day} | Application default model changed from `{old}` to `{body.model_id}` | {reason.replace('|', '/')} | {me['username']} | [supervisor, pending] |\n"
-    with DECISION_LOG.open("a") as f:
-        f.write(row)
-    audit.log("model_approval", me["username"], previous=old, model=body.model_id, reason=reason)
-    return approved_model()
+    res = submit_request("model_approval", body.model_id, {"model_id": body.model_id, "reason": reason})
+    if res["status"] == "pending":
+        return JSONResponse(status_code=202, content={**approved_model(), "approval": res})
+    return {**approved_model(), "approval": res}

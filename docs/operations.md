@@ -35,6 +35,16 @@ The four built-in roles (administrator, analyst, approving officer, auditor) are
 Roles are shared by the whole organisation, so only the top unit manages them; a unit's administrator can assign them. A process keeps roles for up to 10 seconds, a change made through the
 application shows at once in that process. The route policy is changed by a migration, not in the application, because a new route needs its rule written with it (a test checks every route has one).
 
+## Approval requests
+
+`wf.approval_requests` holds requests to change the approved default model, a threshold (review confidence) or a custom role's permissions; `wf.approval_policy` says which permission may decide each kind
+(`model_approve` for the first two, `users` in the top unit for roles) and how many days a request lives (7). The application files a request instead of making the change; a different active user with
+the approving permission approves or rejects it in the Approvals screen (`GET /api/approvals`, `POST /api/approvals/{id}/approve|reject|withdraw`; a rejection needs a reason). The change is made in the same
+database transaction as the approval. The database refuses a decision by the requester, edits to a decided request, and a second pending request for the same subject. A request is checked when it is filed by
+running the change and rolling it back, so one that could never apply (for example a role that would hold conflicting permissions) is refused at once; one that stops applying before it is decided fails
+without changing anything. When no other active user holds the approving permission (one administrator) the change is made at once and recorded as self-approved; the database refuses that flag as soon as
+another eligible approver exists. To bring a second administrator in, create the account under Users.
+
 ## Migrations
 
 The schema is SQL in `db/migrations/versions/`. Change it by adding a new revision (`alembic -c alembic.ini revision -m "what"`), never by editing an applied one.
