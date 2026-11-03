@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Alert, api, Assessment, bestUnet, Context, EventSummary, ModelInfo, Reviews, ReviewStatus, Scene, tileNo, titleCase, Upload, User } from "./api";
+import { BadgeCheck } from "lucide-react";
 import { AccountChip } from "./components/Account";
 import ScenePanel from "./components/ScenePanel";
 import UploadPanel from "./components/UploadPanel";
@@ -172,7 +173,7 @@ export function Workspace({ user, onUser, onSignOut }: { user: User; onUser: (u:
   return (
     <div className="app">
       <header className="header">
-        <span className="wordmark">EnviroSense</span>
+        <span className="brand-inline"><span className="logo sm"><BadgeCheck size={16} aria-hidden /></span>EnviroSense</span>
         <nav className="crumbs" aria-label="Location">
           {source === "xbd" ? (
             <>
@@ -218,7 +219,7 @@ export function Workspace({ user, onUser, onSignOut }: { user: User; onUser: (u:
         <nav className="sidebar" aria-label="Imagery">
           <div className="sidebar-tabs">
             <div className="segmented" role="group" aria-label="Imagery source">
-              <button aria-pressed={source === "xbd"} onClick={() => switchSource("xbd")}>Benchmark tiles</button>
+              <button aria-pressed={source === "xbd"} onClick={() => switchSource("xbd")}>Benchmark</button>
               <button aria-pressed={source === "upload"} onClick={() => switchSource("upload")}>
                 Uploads{uploads.length > 0 && <span className="tab-count">{uploads.length}</span>}
               </button>

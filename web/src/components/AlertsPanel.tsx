@@ -1,3 +1,4 @@
+import { Check, CircleHelp, Download, FileText, RotateCcw, Send, Undo2, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Alert, AlertContext, api, Assessment, BeforeInfo, CLASS_COLOUR, CLASS_LABEL, CLASSES, Context, can, pct, REVIEW_LABEL, ReviewEntry, Reviews, ReviewStatus, tileNo, titleCase, User } from "../api";
 
@@ -105,12 +106,12 @@ function ReviewCard({ alert, index, entry, context, onReview, user }: {
         <textarea value={note} maxLength={500} rows={2} placeholder="What you checked, who was told, why" onChange={(e) => setNote(e.target.value)} />
       </label>
       <div className="btn-row">
-        {entry.status === "proposed" && officer && !mine && <button className="button primary" disabled={busy} onClick={() => save("confirmed")}>Confirm</button>}
-        {entry.status === "proposed" && officer && !mine && <button className="button" disabled={busy} onClick={() => save("pending")}>Return to draft</button>}
-        {(entry.status === "pending" || entry.status === "needs_info") && <button className="button primary" disabled={busy} onClick={() => save("proposed")}>Propose for confirmation</button>}
-        {entry.status !== "confirmed" && !closed && entry.status !== "needs_info" && <button className="button" disabled={busy} onClick={() => save("needs_info")}>Needs information</button>}
-        {entry.status !== "confirmed" && !closed && <button className="button" disabled={busy} onClick={() => save("dismissed")}>Dismiss</button>}
-        {entry.status === "confirmed" && officer && <button className="button" disabled={busy} onClick={() => save("retracted")}>Retract</button>}
+        {entry.status === "proposed" && officer && !mine && <button className="button primary" disabled={busy} onClick={() => save("confirmed")}><Check size={16} aria-hidden />Confirm</button>}
+        {entry.status === "proposed" && officer && !mine && <button className="button" disabled={busy} onClick={() => save("pending")}><Undo2 size={16} aria-hidden />Return to draft</button>}
+        {(entry.status === "pending" || entry.status === "needs_info") && <button className="button primary" disabled={busy} onClick={() => save("proposed")}><Send size={16} aria-hidden />Propose for confirmation</button>}
+        {entry.status !== "confirmed" && !closed && entry.status !== "needs_info" && <button className="button" disabled={busy} onClick={() => save("needs_info")}><CircleHelp size={16} aria-hidden />Needs information</button>}
+        {entry.status !== "confirmed" && !closed && <button className="button" disabled={busy} onClick={() => save("dismissed")}><X size={16} aria-hidden />Dismiss</button>}
+        {entry.status === "confirmed" && officer && <button className="button" disabled={busy} onClick={() => save("retracted")}><RotateCcw size={16} aria-hidden />Retract</button>}
         {(closed || (entry.status === "needs_info")) && <button className="link" disabled={busy} onClick={() => { setNote(""); void save("pending"); }}>Reset to draft</button>}
       </div>
       {entry.status === "proposed" && (mine || !officer) && (
@@ -133,9 +134,9 @@ function ExportBar({ aid, hasDismissed }: { aid: string; hasDismissed: boolean }
   return (
     <div className="export-bar">
       <span className="subtle">Export alerts</span>
-      <a className="link" href={api.exportUrl(aid, "alerts.geojson", include)} download>GeoJSON</a>
-      <a className="link" href={api.exportUrl(aid, "csv", include)} download>CSV</a>
-      <a className="link" href={api.exportUrl(aid, "structures.geojson")} download>Structures</a>
+      <a className="button sm" href={api.exportUrl(aid, "alerts.geojson", include)} download><Download size={14} aria-hidden />GeoJSON</a>
+      <a className="button sm" href={api.exportUrl(aid, "csv", include)} download><Download size={14} aria-hidden />CSV</a>
+      <a className="button sm" href={api.exportUrl(aid, "structures.geojson")} download><Download size={14} aria-hidden />Structures</a>
       {hasDismissed && <label className="inline-check"><input type="checkbox" checked={withDismissed} onChange={(e) => setWithDismissed(e.target.checked)} />include dismissed</label>}
     </div>
   );
@@ -160,8 +161,8 @@ export default function AlertsPanel({ assessment: a, loading, onAlert, alertId, 
         <h1>{upload ? a.scene.name : `${titleCase(a.scene.disaster)}, tile ${tileNo(a.pair_id)}`}</h1>
         <p className="meta">{upload ? `${titleCase(a.scene.disaster_type)} · uploaded imagery` : "Benchmark tile"} · no building inventory used</p>
         <div className="actions">
-          <a className="button" href={api.reportUrl(a.id, "html")} target="_blank" rel="noreferrer">Situation report</a>
-          <a className="link" href={api.reportUrl(a.id, "md")} download>Markdown</a>
+          <a className="button" href={api.reportUrl(a.id, "html")} target="_blank" rel="noreferrer"><FileText size={16} aria-hidden />Situation report</a>
+          <a className="button ghost" href={api.reportUrl(a.id, "md")} download><Download size={16} aria-hidden />Markdown</a>
         </div>
       </section>
 

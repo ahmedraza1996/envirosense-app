@@ -1,3 +1,4 @@
+import { Download, FileText } from "lucide-react";
 import { api, Assessment, CLASS_COLOUR, CLASS_LABEL, CLASSES, NOT_DETECTED_COLOUR, pct, tileNo, titleCase, Zone } from "../api";
 
 interface Props { assessment: Assessment | null; loading: boolean; onZone: (z: Zone) => void; onBuilding: (id: string) => void }
@@ -18,8 +19,8 @@ export default function SummaryPanel({ assessment: a, loading, onZone, onBuildin
         <h1>{titleCase(a.scene.disaster)}, tile {tileNo(a.pair_id)}</h1>
         <p className="meta">{s.buildings} buildings · imagery {a.scene.pre_date} and {a.scene.post_date}</p>
         <div className="actions">
-          <a className="button" href={api.reportUrl(a.id, "html")} target="_blank" rel="noreferrer">Situation report</a>
-          <a className="link" href={api.reportUrl(a.id, "md")} download>Markdown</a>
+          <a className="button" href={api.reportUrl(a.id, "html")} target="_blank" rel="noreferrer"><FileText size={16} aria-hidden />Situation report</a>
+          <a className="button ghost" href={api.reportUrl(a.id, "md")} download><Download size={16} aria-hidden />Markdown</a>
         </div>
       </section>
 

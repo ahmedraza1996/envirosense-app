@@ -1,3 +1,5 @@
+import { Pencil, Trash2, Upload as UploadIcon } from "lucide-react";
+import { IconButton } from "../ui";
 import { useState } from "react";
 import { titleCase, Upload } from "../api";
 
@@ -26,8 +28,8 @@ function Actions({ u, onRename, onDelete }: { u: Upload; onRename: Props["onRena
     return (
       <form className="item-actions" onClick={(e) => e.stopPropagation()} onSubmit={(e) => { e.preventDefault(); void run(() => onRename(u.id, name)); }}>
         <input className="rename-input" value={name} maxLength={80} autoFocus aria-label="Upload name" onChange={(e) => setName(e.target.value)} />
-        <button className="link" type="submit">Save</button>
-        <button className="link" type="button" onClick={() => setMode("idle")}>Cancel</button>
+        <button className="button sm primary" type="submit">Save</button>
+        <button className="button sm" type="button" onClick={() => setMode("idle")}>Cancel</button>
         {error && <span className="upload-error">{error}</span>}
       </form>
     );
@@ -36,16 +38,16 @@ function Actions({ u, onRename, onDelete }: { u: Upload; onRename: Props["onRena
     return (
       <div className="item-actions" onClick={(e) => e.stopPropagation()}>
         <span>Delete this upload and its results?</span>
-        <button className="link danger" onClick={() => void run(() => onDelete(u.id))}>Delete</button>
-        <button className="link" onClick={() => setMode("idle")}>Keep</button>
+        <button className="button sm danger" onClick={() => void run(() => onDelete(u.id))}>Delete</button>
+        <button className="button sm" onClick={() => setMode("idle")}>Keep</button>
         {error && <span className="upload-error">{error}</span>}
       </div>
     );
   }
   return (
     <div className="item-actions" onClick={(e) => e.stopPropagation()}>
-      <button className="link" onClick={() => { setName(u.name); setMode("rename"); }}>Rename</button>
-      <button className="link danger" disabled={busy} title={busy ? "Wait until processing has finished" : undefined} onClick={() => setMode("delete")}>Delete</button>
+      <IconButton icon={Pencil} label="Rename" onClick={() => { setName(u.name); setMode("rename"); }} />
+      <IconButton icon={Trash2} tone="danger" label={busy ? "Wait until processing has finished" : "Delete"} disabled={busy} onClick={() => setMode("delete")} />
     </div>
   );
 }
@@ -54,7 +56,7 @@ export default function UploadPanel({ uploads, uploadId, onUpload, onNew, onRena
   return (
     <>
       <div className="sidebar-head">
-        <button className="button primary" onClick={onNew}>Upload imagery</button>
+        <button className="button primary" onClick={onNew}><UploadIcon size={16} aria-hidden />Upload imagery</button>
         <span className="count">
           After image with location; the before image is found in the archive or uploaded with it.
         </span>

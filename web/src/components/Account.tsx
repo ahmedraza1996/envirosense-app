@@ -1,7 +1,22 @@
-import { FormEvent, useState } from "react";
+import { FormEvent, ReactNode, useEffect, useRef, useState } from "react";
+import { BadgeCheck, ChevronDown, Eye, EyeOff, KeyRound, LogOut, ScrollText, ShieldCheck, Users, Lock } from "lucide-react";
 import { accounts, User } from "../api";
+import { Avatar, Button, Field, Notice } from "../ui";
 
 const msg = (e: unknown) => String(e).replace(/^Error: /, "");
+
+function Secret({ value, onChange, autoComplete, label, hint, autoFocus }: { value: string; onChange: (v: string) => void; autoComplete: string; label: string; hint?: ReactNode; autoFocus?: boolean }) {
+  const [show, setShow] = useState(false);
+  return (
+    <Field label={label} hint={hint} wide>
+      <span className="input-icon">
+        <Lock size={16} aria-hidden />
+        <input type={show ? "text" : "password"} autoComplete={autoComplete} autoFocus={autoFocus} value={value} onChange={(e) => onChange(e.target.value)} />
+        <button type="button" className="reveal" aria-label={show ? "Hide password" : "Show password"} onClick={() => setShow(!show)}>{show ? <EyeOff size={16} /> : <Eye size={16} />}</button>
+      </span>
+    </Field>
+  );
+}
 
 export function Login({ onUser }: { onUser: (u: User) => void }) {
   const [username, setUsername] = useState("");
@@ -15,19 +30,27 @@ export function Login({ onUser }: { onUser: (u: User) => void }) {
     try { onUser(await accounts.login(username, password)); } catch (err) { setError(msg(err)); } finally { setBusy(false); }
   };
   return (
-    <main className="auth-page">
-      <form className="auth-card" onSubmit={submit}>
-        <span className="wordmark">EnviroSense</span>
-        <h1>Sign in</h1>
-        <p className="meta">Damage assessment decision support. Every action is recorded against your account.</p>
-        <label className="field-block"><span>Username</span>
-          <input type="text" autoComplete="username" autoFocus value={username} onChange={(e) => setUsername(e.target.value)} /></label>
-        <label className="field-block"><span>Password</span>
-          <input type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} /></label>
-        {error && <p className="meta error-text" role="alert">{error}</p>}
-        <button className="button primary" disabled={busy || !username || !password}>{busy ? "Signing in…" : "Sign in"}</button>
-        <p className="meta">Accounts are created by your unit's administrator.</p>
-      </form>
+    <main className="signin">
+      <section className="signin-brand">
+        <div className="brand"><span className="logo"><BadgeCheck size={22} aria-hidden /></span><div><strong>EnviroSense</strong><span>Damage assessment decision support</span></div></div>
+        <h1>From imagery to a reviewed, accountable damage assessment.</h1>
+        <ul>
+          <li><ShieldCheck size={20} aria-hidden /><div><strong>Two people for every release</strong><span>An analyst proposes, a different officer confirms.</span></div></li>
+          <li><Users size={20} aria-hidden /><div><strong>Your unit's work only</strong><span>Each team sees its own area and the units below it.</span></div></li>
+          <li><ScrollText size={20} aria-hidden /><div><strong>Every action on the record</strong><span>A tamper-evident audit log names who did what, and when.</span></div></li>
+        </ul>
+      </section>
+      <section className="signin-form">
+        <form onSubmit={submit}>
+          <h2>Sign in</h2>
+          <p className="hint">Use the account your unit's administrator created for you.</p>
+          {error && <Notice tone="error">{error}</Notice>}
+          <Field label="Username" wide><input type="text" autoComplete="username" autoFocus value={username} onChange={(e) => setUsername(e.target.value)} /></Field>
+          <Secret label="Password" autoComplete="current-password" value={password} onChange={setPassword} />
+          <Button variant="primary" type="submit" disabled={busy || !username || !password}>{busy ? "Signing in…" : "Sign in"}</Button>
+          <p className="hint center">Sessions end when you sign out or an administrator disables the account.</p>
+        </form>
+      </section>
     </main>
   );
 }
@@ -45,20 +68,19 @@ export function ChangePassword({ user, forced, onDone, onCancel }: { user: User;
     setError(null);
     try { await accounts.changePassword(current, next); onDone(); } catch (err) { setError(msg(err)); } finally { setBusy(false); }
   };
+  const strong = next.length >= 10;
   const form = (
     <form className="auth-card" onSubmit={submit}>
-      <h1>{forced ? "Choose a new password" : "Change password"}</h1>
-      {forced && <p className="meta">{user.name}, your password was set by an administrator. Choose your own before you continue.</p>}
-      <label className="field-block"><span>{forced ? "Temporary password" : "Current password"}</span>
-        <input type="password" autoComplete="current-password" value={current} onChange={(e) => setCurrent(e.target.value)} /></label>
-      <label className="field-block"><span>New password (at least 10 characters)</span>
-        <input type="password" autoComplete="new-password" value={next} onChange={(e) => setNext(e.target.value)} /></label>
-      <label className="field-block"><span>New password again</span>
-        <input type="password" autoComplete="new-password" value={again} onChange={(e) => setAgain(e.target.value)} /></label>
-      {error && <p className="meta error-text" role="alert">{error}</p>}
-      <div className="btn-row">
-        <button className="button primary" disabled={busy || !current || !next}>Save password</button>
-        {onCancel && <button type="button" className="button" onClick={onCancel}>Cancel</button>}
+      <span className="logo"><KeyRound size={20} aria-hidden /></span>
+      <h2>{forced ? "Choose your password" : "Change password"}</h2>
+      {forced && <p className="hint">{user.name}, an administrator set your first password. Choose your own before you continue.</p>}
+      {error && <Notice tone="error">{error}</Notice>}
+      <Secret label={forced ? "Temporary password" : "Current password"} autoComplete="current-password" value={current} onChange={setCurrent} autoFocus />
+      <Secret label="New password" autoComplete="new-password" value={next} onChange={setNext} hint={<span className={strong ? "ok" : ""}>{strong ? "Long enough." : "At least 10 characters."}</span>} />
+      <Secret label="New password again" autoComplete="new-password" value={again} onChange={setAgain} />
+      <div className="btn-row end">
+        {onCancel && <Button onClick={onCancel}>Cancel</Button>}
+        <Button variant="primary" type="submit" disabled={busy || !current || !strong}>Save password</Button>
       </div>
     </form>
   );
@@ -69,17 +91,27 @@ export function ChangePassword({ user, forced, onDone, onCancel }: { user: User;
 export function AccountChip({ user, onSignOut, onUser }: { user: User; onSignOut: () => void; onUser: (u: User) => void }) {
   const [open, setOpen] = useState(false);
   const [pw, setPw] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) setOpen(false); };
+    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", esc);
+    return () => { document.removeEventListener("mousedown", close); document.removeEventListener("keydown", esc); };
+  }, [open]);
   return (
-    <div className="account">
-      <button className="account-btn" aria-expanded={open} onClick={() => setOpen(!open)} title={user.unit_path}>
-        <span className="account-name">{user.name}</span>
-        <span className="account-sub">{user.role_label} · {user.unit_name}</span>
+    <div className="account" ref={ref}>
+      <button className="account-btn" aria-expanded={open} aria-haspopup="menu" onClick={() => setOpen(!open)} title={user.unit_path}>
+        <Avatar name={user.name} size={32} />
+        <span className="account-text"><span className="account-name">{user.name}</span><span className="account-sub">{user.role_label}</span></span>
+        <ChevronDown size={16} aria-hidden />
       </button>
       {open && (
         <div className="account-menu" role="menu">
-          <p className="meta">Signed in as <strong>{user.username}</strong><br />{user.unit_path}</p>
-          <button className="link" role="menuitem" onClick={() => { setOpen(false); setPw(true); }}>Change password</button>
-          <button className="link" role="menuitem" onClick={onSignOut}>Sign out</button>
+          <div className="account-who"><strong>{user.name}</strong><span>{user.username}</span><span>{user.unit_path}</span></div>
+          <button role="menuitem" onClick={() => { setOpen(false); setPw(true); }}><KeyRound size={16} aria-hidden />Change password</button>
+          <button role="menuitem" onClick={onSignOut}><LogOut size={16} aria-hidden />Sign out</button>
         </div>
       )}
       {pw && <ChangePassword user={user} onDone={() => { setPw(false); void accounts.me().then(onUser); }} onCancel={() => setPw(false)} />}
