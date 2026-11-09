@@ -79,6 +79,8 @@ _SELECT = (f"SELECT u.id, u.unit_id, u.created_by, u.name, u.disaster_type, to_c
 def _shape(r: dict) -> dict:
     """The upload as the interface knows it: its details and a `status` block."""
     st = {"state": _STATE.get(r["state"], "failed"), "step": r["step"] or "", "attempts": r["attempts"], "updated_utc": r["updated_utc"], **(r["result"] or {})}
+    if st["state"] == "done" and st.get("stage") == "alignment":
+        st["state"], st["step"] = "review", "Check the alignment"
     if r["error"]:
         st.update(error=r["error"], trace=r["error_detail"])
     meta = {k: v for k, v in (r["meta"] or {}).items()}
@@ -286,7 +288,10 @@ def _work():
         threading.Thread(target=_beat, args=(job, stop), daemon=True).start()
         try:
             rec = process(uid)
-            _finish(job, True, {"assessment_id": rec["id"], "alerts": len(rec["alerts"])})
+            if rec is None:
+                _finish(job, True, {"stage": "alignment", "needs_review": True})
+            else:
+                _finish(job, True, {"assessment_id": rec["id"], "alerts": len(rec["alerts"])})
         except Exception as e:  # noqa: BLE001  report any failure on the job rather than killing the worker
             _finish(job, False, error=str(e) if isinstance(e, imagery.ImageryError) else f"{type(e).__name__}: {e}", detail=traceback.format_exc()[-2000:])
         finally:
@@ -324,12 +329,48 @@ def find_before(after: imagery.GeoImage, event_date: str | None):
     return pre, valid, {"kind": "archive", "archive": arch.name, "tiles": used}
 
 
-def process(uid: str) -> dict:
-    d = folder(uid)
-    meta = get_meta(uid)
-    notes = []
+ALIGN_FILE = "alignment.json"
+PREVIEW_SIDE = 1600          # long side of the preview images shown in the alignment check
+COLOUR_DIFF_WARN = 12.0      # mean CIELAB distance between the two images' colours above which the pair is flagged
+CHOICES = ("auto", "manual", "placed", "after_only")
 
-    set_status(uid, step="Reading after image")
+
+def _save_rgb(path: Path, rgb: np.ndarray) -> None:
+    cv2.imwrite(str(path), cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_PNG_COMPRESSION, 1])
+
+
+def _load_rgb(path: Path) -> np.ndarray:
+    return cv2.cvtColor(cv2.imread(str(path), cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB)
+
+
+def _save_mask(path: Path, m: np.ndarray) -> None:
+    cv2.imwrite(str(path), m.astype(np.uint8) * 255, [cv2.IMWRITE_PNG_COMPRESSION, 1])
+
+
+def _load_mask(path: Path) -> np.ndarray:
+    return cv2.imread(str(path), cv2.IMREAD_UNCHANGED) > 0
+
+
+def _preview(d: Path, name: str, rgb: np.ndarray, valid: np.ndarray | None = None) -> float:
+    """A reduced JPEG for the alignment check; ground the image does not cover is grey. Returns the scale (preview px / full px)."""
+    h, w = rgb.shape[:2]
+    k = min(1.0, PREVIEW_SIDE / max(h, w))
+    img = rgb if valid is None else np.where(valid[..., None], rgb, np.uint8(128))
+    small = cv2.resize(img, (max(1, round(w * k)), max(1, round(h * k))), interpolation=cv2.INTER_AREA) if k < 1 else img
+    cv2.imwrite(str(d / f"preview_{name}.jpg"), cv2.cvtColor(small, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 86])
+    return k
+
+
+def read_alignment(uid: str) -> dict | None:
+    return read_json(folder(uid) / ALIGN_FILE)
+
+
+def _write_alignment(uid: str, al: dict) -> dict:
+    (folder(uid) / ALIGN_FILE).write_text(json.dumps(al, indent=1))
+    return al
+
+
+def _read_after(d: Path, meta: dict, notes: list) -> imagery.GeoImage:
     after = imagery.read_image(d / meta["after_file"], meta.get("after_bounds"))
     px = imagery.pixel_size_m(after)
     if not KEEP_M[0] <= px <= KEEP_M[1]:
@@ -340,6 +381,133 @@ def process(uid: str) -> dict:
     if max(after.shape) > MAX_SIDE:
         raise imagery.ImageryError(f"image covers {after.shape[1]} x {after.shape[0]} px at {imagery.pixel_size_m(after):.2f} m; "
                                    f"crop it to at most {MAX_SIDE} px per side (about {MAX_SIDE * TARGET_M / 1000:.0f} km at {TARGET_M} m per pixel)")
+    return after
+
+
+def _auto_align(pre, valid, post, post_valid, pxm):
+    """Learned registration, then phase correlation for what is left. Returns the aligned before image, its mask, the QA record and notes."""
+    notes = []
+    qa = {"coverage": float(valid.sum() / max(post_valid.sum(), 1)), "shift_px": None, "shift_m": None,
+          "response": None, "corrected": False, "method": None, "rotation_deg": 0.0, "scale": 1.0,
+          "matches": None, "inliers": None, "rms_px": None}
+    if qa["coverage"] <= 0.25:
+        return pre, valid, qa, notes
+    total = np.zeros(2)                                  # translation of pre relative to post, pixels (shift convention)
+    reg = registration.register(pre, post, valid)
+    if reg.ok:
+        qa.update(method=reg.method, matches=reg.matches, inliers=reg.inliers, rotation_deg=round(reg.rotation_deg, 3),
+                  scale=round(reg.scale, 4), rms_px=round(reg.rms_px, 2))
+        significant = abs(reg.rotation_deg) >= ROT_MIN_DEG or abs(reg.scale - 1) >= SCALE_MIN or reg.shift_px >= SHIFT_MIN_PX
+        m = np.float32(reg.matrix)
+        if significant and reg.shift_px <= SHIFT_MAX_PX * 4:
+            h_, w_ = valid.shape
+            v = m[:, :2] @ np.array([w_ / 2, h_ / 2]) + m[:, 2] - np.array([w_ / 2, h_ / 2])
+            pre, valid = registration.apply(reg, pre, valid)
+            valid &= post_valid
+            total = -v
+            qa["corrected"] = True
+            bits = []
+            if abs(reg.rotation_deg) >= ROT_MIN_DEG:
+                bits.append(f"rotated by {reg.rotation_deg:+.2f} degrees")
+            if abs(reg.scale - 1) >= SCALE_MIN:
+                bits.append(f"zoom {100 * (reg.scale - 1):+.1f}%")
+            if reg.shift_px >= SHIFT_MIN_PX:
+                bits.append(f"shifted by {reg.shift_px * pxm:.1f} m")
+            notes.append(f"The before image was registered to the after image from {reg.inliers} matching features "
+                         f"({reg.method}): {', '.join(bits)}.")
+    else:
+        qa["method"] = "phase correlation"
+        notes.append(f"Rotation and zoom could not be measured ({reg.reason}); only a shift was looked for.")
+    est = imagery.estimate_shift(pre, post, valid)
+    if est and est[2] < MIN_RESPONSE:
+        qa["response"] = round(est[2], 3)
+        if not qa["corrected"]:
+            notes.append("The before and after images differ too much to measure an offset; their georeferencing is used as given.")
+    elif est:
+        dx, dy, resp = est
+        mag = math.hypot(dx, dy)
+        qa["response"] = round(resp, 3)
+        if SHIFT_MIN_PX <= mag <= SHIFT_MAX_PX:
+            pre, valid = imagery.shift_image(pre, valid, dx, dy)
+            valid &= post_valid
+            total = total + (dx, dy)
+            qa["corrected"] = True
+        elif mag > SHIFT_MAX_PX:
+            notes.append(f"Before and after images appear offset by {mag * pxm:.1f} m; the offset was not corrected, check the georeferencing.")
+    qa.update(shift_px=[round(float(total[0]), 2), round(float(total[1]), 2)], shift_m=round(float(np.hypot(*total)) * pxm, 2))
+    qa["coverage"] = float(valid.sum() / max(post_valid.sum(), 1))
+    return pre, valid, qa, notes
+
+
+def _quality(qa: dict) -> dict:
+    """Traffic light for the automatic alignment, with the reason in words."""
+    if qa["coverage"] <= 0.25:
+        return {"level": "none", "text": "No before image covers enough of the area to align."}
+    learned = qa.get("method") not in (None, "phase correlation")
+    if learned and (qa.get("inliers") or 0) >= 40 and (qa.get("rms_px") or 9) <= 2.5:
+        return {"level": "good", "text": f"{qa['inliers']} matching features agree to {qa['rms_px']:.1f} px."}
+    if learned or (qa.get("response") or 0) >= MIN_RESPONSE:
+        why = f"only {qa['inliers']} matching features" if learned and (qa.get("inliers") or 0) < 40 else \
+              (f"matching features disagree by {qa['rms_px']:.1f} px" if learned else "only a shift could be measured")
+        return {"level": "check", "text": f"Aligned, but {why}: check the overlay."}
+    return {"level": "poor", "text": "The images share too few features to align automatically; place tie points or use the coordinates only."}
+
+
+def _colour_difference(pre, post, valid) -> float | None:
+    if valid.sum() < 1000:
+        return None
+    idx = np.flatnonzero(valid.ravel())
+    idx = idx[:: max(1, idx.size // 200_000)]
+    lab = lambda a: cv2.cvtColor(a.reshape(-1, 1, 3)[idx], cv2.COLOR_RGB2LAB).reshape(-1, 3).astype(np.float32) * [100 / 255, 1, 1] - [0, 128, 128]
+    a, b = lab(pre), lab(post)
+    return float(np.linalg.norm(a.mean(0) - b.mean(0)) + 0.5 * np.linalg.norm(a.std(0) - b.std(0)))
+
+
+def _checks(meta, px_input, after, source, qa, pre, post, valid) -> list:
+    """Input checks shown before the assessment runs: each {name, level ok|warn|fail, text}."""
+    out = []
+    add = lambda n, lv, t: out.append({"name": n, "level": lv, "text": t})
+    add("Location", "ok", "Placed by its GeoTIFF georeference." if not meta.get("after_bounds") else "Placed by the corner coordinates given (north-up).")
+    pxm = imagery.pixel_size_m(after)
+    h, w = after.shape
+    if KEEP_M[0] <= px_input <= KEEP_M[1]:
+        add("Resolution", "ok", f"{px_input:.2f} m per pixel, as in the training imagery.")
+    else:
+        add("Resolution", "warn" if px_input <= COARSE_M else "fail",
+            f"{px_input:.2f} m per pixel; resampled to {pxm:.2f} m." + ("" if px_input <= COARSE_M else " Damage classes are unreliable at this resolution."))
+    add("Size", "ok", f"{w} x {h} px ({w * pxm / 1000:.1f} x {h * pxm / 1000:.1f} km)" + (", processed in blocks." if max(w, h) > BLOCKS_ABOVE else "."))
+    if source["kind"] == "upload":
+        add("Before image", "ok", "Uploaded with the after image.")
+    elif source.get("tiles"):
+        dates = sorted({t["capture_date"] for t in source["tiles"] if t.get("capture_date")})
+        add("Before image", "ok", f"Found in the archive: {len(source['tiles'])} tile(s)" + (f", captured {', '.join(dates)}." if dates else "."))
+        ev = meta.get("event_date")
+        if ev and any(dt >= ev for dt in dates):
+            add("Capture order", "fail", f"An archive image was captured on or after the event date ({ev}).")
+        elif not ev:
+            add("Capture order", "warn", "No event date given, so the archive could not be limited to images taken before the event.")
+    else:
+        add("Before image", "warn", "None found. Damage will be judged from the after image alone, which is less reliable.")
+    cov = qa["coverage"]
+    add("Overlap", "ok" if cov >= 0.9 else "warn" if cov > 0.25 else "fail",
+        f"The before image covers {cov:.0%} of the after image." + ("" if cov >= 0.9 else " Elsewhere the after image is assessed on its own."))
+    diff = _colour_difference(pre, post, valid)
+    if diff is not None:
+        add("Colour", "ok" if diff < COLOUR_DIFF_WARN else "warn",
+            "Similar colour in both images." if diff < COLOUR_DIFF_WARN else
+            "The two images differ strongly in colour (season, light or sensor); the model is less reliable on such pairs.")
+    return out
+
+
+def prepare(uid: str) -> dict:
+    """Step 1 of an upload: read the images, place the before image on the after image's grid by its coordinates, align it automatically,
+    run the input checks and write the previews. The assessment waits for a person to check the alignment unless the upload asked not to."""
+    d = folder(uid)
+    meta = get_meta(uid)
+    notes = []
+    set_status(uid, step="Reading after image")
+    px_input = imagery.pixel_size_m(imagery.read_image(d / meta["after_file"], meta.get("after_bounds")))
+    after = _read_after(d, meta, notes)
     post = after.rgb
     post_valid = post.max(-1) > 0
 
@@ -351,58 +519,140 @@ def process(uid: str) -> dict:
     else:
         pre, valid, source = find_before(after, meta.get("event_date"))
     valid &= post_valid
+    _save_rgb(d / "post_full.png", post)
+    _save_rgb(d / "before_placed.png", pre)
+    _save_mask(d / "valid_placed.png", valid)
 
     set_status(uid, step="Aligning before and after")
-    qa = {"coverage": float(valid.sum() / max(post_valid.sum(), 1)), "shift_px": None, "shift_m": None,
-          "response": None, "corrected": False, "method": None, "rotation_deg": 0.0, "scale": 1.0,
-          "matches": None, "inliers": None}
-    if qa["coverage"] > 0.25:
-        pxm = imagery.pixel_size_m(after)
-        total = np.zeros(2)                                  # translation of pre relative to post, pixels (shift convention)
-        reg = registration.register(pre, post, valid)
-        if reg.ok:
-            qa.update(method=reg.method, matches=reg.matches, inliers=reg.inliers, rotation_deg=round(reg.rotation_deg, 3),
-                      scale=round(reg.scale, 4), rms_px=round(reg.rms_px, 2))
-            significant = abs(reg.rotation_deg) >= ROT_MIN_DEG or abs(reg.scale - 1) >= SCALE_MIN or reg.shift_px >= SHIFT_MIN_PX
-            m = np.float32(reg.matrix)
-            if significant and reg.shift_px <= SHIFT_MAX_PX * 4:
-                h_, w_ = valid.shape
-                v = m[:, :2] @ np.array([w_ / 2, h_ / 2]) + m[:, 2] - np.array([w_ / 2, h_ / 2])
-                pre, valid = registration.apply(reg, pre, valid)
-                valid &= post_valid
-                total = -v
-                qa["corrected"] = True
-                bits = []
-                if abs(reg.rotation_deg) >= ROT_MIN_DEG:
-                    bits.append(f"rotated by {reg.rotation_deg:+.2f} degrees")
-                if abs(reg.scale - 1) >= SCALE_MIN:
-                    bits.append(f"zoom {100 * (reg.scale - 1):+.1f}%")
-                if reg.shift_px >= SHIFT_MIN_PX:
-                    bits.append(f"shifted by {reg.shift_px * pxm:.1f} m")
-                notes.append(f"The before image was registered to the after image from {reg.inliers} matching features "
-                             f"({reg.method}): {', '.join(bits)}.")
-        else:
-            qa["method"] = "phase correlation"
-            notes.append(f"Rotation and zoom could not be measured ({reg.reason}); only a shift was looked for.")
-        est = imagery.estimate_shift(pre, post, valid)
-        if est and est[2] < MIN_RESPONSE:
-            qa["response"] = round(est[2], 3)
-            if not qa["corrected"]:
-                notes.append("The before and after images differ too much to measure an offset; their georeferencing is used as given.")
-        elif est:
-            dx, dy, resp = est
-            mag = math.hypot(dx, dy)
-            qa["response"] = round(resp, 3)
-            if SHIFT_MIN_PX <= mag <= SHIFT_MAX_PX:
-                pre, valid = imagery.shift_image(pre, valid, dx, dy)
-                valid &= post_valid
-                total = total + (dx, dy)
-                qa["corrected"] = True
-            elif mag > SHIFT_MAX_PX:
-                notes.append(f"Before and after images appear offset by {mag * pxm:.1f} m; the offset was not corrected, "
-                             "check the georeferencing.")
-        qa.update(shift_px=[round(float(total[0]), 2), round(float(total[1]), 2)], shift_m=round(float(np.hypot(*total)) * pxm, 2))
-        qa["coverage"] = float(valid.sum() / max(post_valid.sum(), 1))
+    pxm = imagery.pixel_size_m(after)
+    pre_a, valid_a, qa, auto_notes = _auto_align(pre.copy(), valid.copy(), post, post_valid, pxm)
+    _save_rgb(d / "before_auto.png", pre_a)
+    _save_mask(d / "valid_auto.png", valid_a)
+    k = _preview(d, "after", post)
+    _preview(d, "before_placed", pre, valid)
+    _preview(d, "before_auto", pre_a, valid_a)
+    has_before = qa["coverage"] > 0.25
+    review = bool(meta.get("review_alignment")) and has_before
+    h, w = post.shape[:2]
+    al = {"state": "review" if review else "confirmed", "choice": "auto" if has_before else "after_only", "version": 1,
+          "source": source, "auto": qa, "auto_notes": auto_notes, "quality": _quality(qa), "manual": None, "notes": notes,
+          "checks": _checks(meta, px_input, after, source, qa, pre_a, post, valid_a), "pixel_size_m": pxm,
+          "preview": {"scale": k, "width": round(w * k), "height": round(h * k)}, "confirmed_by": None if review else "automatic", "confirmed_utc": None}
+    return _write_alignment(uid, al)
+
+
+def _similarity(src: np.ndarray, dst: np.ndarray) -> np.ndarray:
+    """Least-squares similarity (rotation, zoom, shift) mapping src points onto dst points; exact for two points."""
+    ms, md = src.mean(0), dst.mean(0)
+    a, b = src - ms, dst - md
+    num = (a[:, 0] * b[:, 1] - a[:, 1] * b[:, 0]).sum()
+    den = (a * b).sum()
+    theta = math.atan2(num, den)
+    scale = math.hypot(num, den) / max((a ** 2).sum(), 1e-9)
+    c, s = scale * math.cos(theta), scale * math.sin(theta)
+    r = np.array([[c, -s], [s, c]])
+    t = md - r @ ms
+    return np.hstack([r, t[:, None]])
+
+
+def manual_align(uid: str, pairs: list, by: str) -> dict:
+    """Align the before image from tie points placed by a person. pairs: [[x_before, y_before, x_after, y_after], ...] in preview pixels."""
+    al = read_alignment(uid)
+    if not al or al["state"] != "review":
+        raise imagery.ImageryError("the alignment of this upload is not open for checking")
+    if len(pairs) < 2:
+        raise imagery.ImageryError("place at least two pairs of matching points (three or more are better)")
+    k = al["preview"]["scale"]
+    pts = np.array(pairs, np.float64) / k
+    m = _similarity(pts[:, :2], pts[:, 2:])
+    d = folder(uid)
+    post = _load_rgb(d / "post_full.png")
+    pre, valid = _load_rgb(d / "before_placed.png"), _load_mask(d / "valid_placed.png")
+    h, w = valid.shape
+    pre_m = cv2.warpAffine(pre, np.float32(m), (w, h), flags=cv2.INTER_LINEAR, borderValue=0)
+    valid_m = cv2.warpAffine(valid.astype(np.uint8), np.float32(m), (w, h), flags=cv2.INTER_NEAREST, borderValue=0).astype(bool) & (post.max(-1) > 0)
+    _save_rgb(d / "before_manual.png", pre_m)
+    _save_mask(d / "valid_manual.png", valid_m)
+    _preview(d, "before_manual", pre_m, valid_m)
+    pxm = al["pixel_size_m"]
+    res = np.linalg.norm((pts[:, :2] @ m[:, :2].T + m[:, 2]) - pts[:, 2:], axis=1) * pxm
+    centre = np.array([w / 2, h / 2])
+    al["manual"] = {"pairs": pairs, "rotation_deg": round(math.degrees(math.atan2(m[1, 0], m[0, 0])), 3),
+                    "scale": round(float(math.hypot(m[0, 0], m[1, 0])), 4),
+                    "shift_m": round(float(np.linalg.norm(m[:, :2] @ centre + m[:, 2] - centre)) * pxm, 2),
+                    "residuals_m": [round(float(r), 2) for r in res], "rms_m": round(float(np.sqrt((res ** 2).mean())), 2),
+                    "coverage": float(valid_m.sum() / max((post.max(-1) > 0).sum(), 1)), "by": by,
+                    "utc": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())}
+    al["choice"], al["version"] = "manual", al["version"] + 1
+    return _write_alignment(uid, al)
+
+
+def choose_alignment(uid: str, choice: str) -> dict:
+    al = read_alignment(uid)
+    if not al or al["state"] != "review":
+        raise imagery.ImageryError("the alignment of this upload is not open for checking")
+    if choice not in CHOICES or (choice == "manual" and not al.get("manual")):
+        raise imagery.ImageryError("choose auto, placed, after_only, or manual after placing tie points")
+    al["choice"], al["version"] = choice, al["version"] + 1
+    return _write_alignment(uid, al)
+
+
+def confirm_alignment(uid: str, by: str) -> dict:
+    """A person accepted the alignment shown: record who and when, and queue the assessment."""
+    al = read_alignment(uid)
+    if not al or al["state"] != "review":
+        raise imagery.ImageryError("the alignment of this upload is not open for checking")
+    al.update(state="confirmed", confirmed_by=by, confirmed_utc=time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()))
+    _write_alignment(uid, al)
+    with tx() as c:
+        run(c, "INSERT INTO ingest.jobs (upload_id, step, created_by) VALUES (:i, 'Waiting for the previous job', :b)", i=uid, b=by)
+    _ensure_worker()
+    return al
+
+
+def process(uid: str) -> dict | None:
+    """Run the next step of an upload. Returns None when the upload now waits for its alignment to be checked."""
+    al = read_alignment(uid)
+    if al is None:
+        al = prepare(uid)
+    if al["state"] == "review":
+        return None
+    return assess(uid, al)
+
+
+def assess(uid: str, al: dict) -> dict:
+    """Step 2: detect buildings and damage with the before image placed as chosen in the alignment check, and raise area alerts."""
+    d = folder(uid)
+    meta = get_meta(uid)
+    after = _read_after(d, meta, [])
+    notes = list(al["notes"])
+    post = _load_rgb(d / "post_full.png")
+    post_valid = post.max(-1) > 0
+    source, choice = al["source"], al["choice"]
+    files = {"auto": ("before_auto.png", "valid_auto.png"), "manual": ("before_manual.png", "valid_manual.png"),
+             "placed": ("before_placed.png", "valid_placed.png")}
+    if choice in files:
+        pre, valid = _load_rgb(d / files[choice][0]), _load_mask(d / files[choice][1])
+    else:
+        pre, valid = np.zeros_like(post), np.zeros(post_valid.shape, bool)
+    qa = dict(al["auto"])
+    if choice == "auto":
+        notes += al["auto_notes"]
+    elif choice == "manual":
+        mn = al["manual"]
+        qa.update(method="manual tie points", corrected=True, rotation_deg=mn["rotation_deg"], scale=mn["scale"], shift_m=mn["shift_m"],
+                  matches=len(mn["pairs"]), inliers=len(mn["pairs"]), rms_px=None)
+        notes.append(f"The before image was aligned by hand from {len(mn['pairs'])} pairs of tie points (residual {mn['rms_m']:.1f} m).")
+    elif choice == "placed":
+        qa.update(method="coordinates only", corrected=False, rotation_deg=0.0, scale=1.0, shift_m=0.0, shift_px=[0.0, 0.0])
+        notes.append("The before image is placed by its coordinates only; the automatic alignment was not used.")
+    else:
+        notes.append("The before image was not used; the after image was assessed on its own.")
+    qa["coverage"] = float(valid.sum() / max(post_valid.sum(), 1))
+    if al.get("confirmed_by") not in (None, "automatic"):
+        notes.append(f"The alignment was checked by {al['confirmed_by']} ({al['confirmed_utc']} UTC) before the assessment ran.")
+    qa["choice"] = choice
+    pre = pre.copy()
     pre[~valid] = 0
     cv2.imwrite(str(d / "post.jpg"), cv2.cvtColor(post, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 88])
     cv2.imwrite(str(d / "pre.jpg"), cv2.cvtColor(pre, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 88])

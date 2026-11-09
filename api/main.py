@@ -126,7 +126,8 @@ async def create_upload(after: UploadFile = File(...), before: UploadFile | None
                         model_id: str = Form("unet_early"), west: float | None = Form(None), south: float | None = Form(None),
                         east: float | None = Form(None), north: float | None = Form(None),
                         before_west: float | None = Form(None), before_south: float | None = Form(None),
-                        before_east: float | None = Form(None), before_north: float | None = Form(None)):
+                        before_east: float | None = Form(None), before_north: float | None = Form(None),
+                        review_alignment: bool = Form(False)):
     """After image (+ optional before image) and metadata; processed in the background, poll GET /api/uploads/{id}.
     Plain PNG/JPEG need the after image's corner coordinates (degrees, north-up); GeoTIFFs carry their own."""
     models = service.models()
@@ -161,7 +162,7 @@ async def create_upload(after: UploadFile = File(...), before: UploadFile | None
         raise
     uploads.create(a, {"name": name.strip()[:80] or "Untitled upload", "disaster_type": disaster_type,
                        "event_date": event_date or None, "model_id": model_id, "after_bounds": bounds,
-                       "before_bounds": before_bounds}, b)
+                       "before_bounds": before_bounds, "review_alignment": review_alignment}, b)
     return uploads.info(uid)
 
 
@@ -178,6 +179,75 @@ def get_upload(uid: str):
         return uploads.info(uid)
     except KeyError:
         raise HTTPException(404, f"no upload {uid}")
+
+
+PREVIEWS = ("after", "before_placed", "before_auto", "before_manual")
+
+
+def _alignment_or_404(uid: str) -> dict:
+    if not auth.in_scope(uid):
+        raise HTTPException(404, f"no upload {uid}")
+    try:
+        al = uploads.read_alignment(uid)
+    except KeyError:
+        raise HTTPException(404, f"no upload {uid}")
+    if al is None:
+        raise HTTPException(404, "the images of this upload have not been prepared yet")
+    return al
+
+
+@app.get("/api/uploads/{uid}/alignment")
+def get_alignment(uid: str):
+    """The alignment check: how the before image was placed and aligned, its quality, the input checks and the preview size."""
+    return _alignment_or_404(uid)
+
+
+@app.get("/api/uploads/{uid}/preview/{which}")
+def get_preview(uid: str, which: str):
+    _alignment_or_404(uid)
+    if which not in PREVIEWS:
+        raise HTTPException(400, f"which must be one of {', '.join(PREVIEWS)}")
+    path = uploads.folder(uid) / f"preview_{which}.jpg"
+    if not path.exists():
+        raise HTTPException(404, f"no {which} preview")
+    return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+
+class TiePoints(BaseModel):
+    pairs: list[list[float]]
+
+
+class AlignmentChoice(BaseModel):
+    choice: str
+
+
+def _alignment_action(uid: str, fn):
+    _alignment_or_404(uid)
+    try:
+        return fn()
+    except uploads.imagery.ImageryError as e:
+        raise HTTPException(409, str(e))
+
+
+@app.post("/api/uploads/{uid}/alignment/manual")
+def manual_alignment(uid: str, body: TiePoints):
+    if any(len(p) != 4 for p in body.pairs):
+        raise HTTPException(400, "each pair is [x_before, y_before, x_after, y_after]")
+    al = _alignment_action(uid, lambda: uploads.manual_align(uid, body.pairs, auth.actor()))
+    audit.log("align_upload_manually", auth.actor(), uid, pairs=len(body.pairs), rms_m=al["manual"]["rms_m"])
+    return al
+
+
+@app.post("/api/uploads/{uid}/alignment/choose")
+def choose_alignment(uid: str, body: AlignmentChoice):
+    return _alignment_action(uid, lambda: uploads.choose_alignment(uid, body.choice))
+
+
+@app.post("/api/uploads/{uid}/alignment/confirm")
+def confirm_alignment(uid: str):
+    al = _alignment_action(uid, lambda: uploads.confirm_alignment(uid, auth.actor()))
+    audit.log("confirm_alignment", auth.actor(), uid, choice=al["choice"], quality=al["quality"]["level"])
+    return uploads.info(uid)
 
 
 class UploadEdit(BaseModel):

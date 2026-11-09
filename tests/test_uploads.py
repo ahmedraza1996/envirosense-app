@@ -139,3 +139,31 @@ def test_plain_pair_with_its_own_before_corners(tile, store):
     r = client.post("/api/uploads", files={"after": ("a.tif", open(uploads.folder(uid) / "after_input.jpg", "rb").read(), "image/tiff"),
                                            "before": files["before"]}, data={"name": "x", "disaster_type": "fire", "model_id": "unet_post"})
     assert r.status_code == 400 and "before" in r.text
+
+
+def test_alignment_is_checked_before_the_assessment(tile, store, monkeypatch):
+    """With review_alignment the upload stops after aligning: previews and input checks are written, tie points realign the before
+    image, and the assessment runs only after a person confirms, with their name on the record."""
+    monkeypatch.setattr(uploads, "_ensure_worker", lambda: None)     # run the queued job here, not in the background worker
+    pid, rgb, tf = tile
+    uid, rec = upload(store, "Reviewed", rgb, tf, "unet_post", review_alignment=True)
+    assert rec is None
+    al = uploads.read_alignment(uid)
+    assert al["state"] == "review" and al["choice"] == "auto" and al["quality"]["level"] in ("good", "check")
+    assert {"Location", "Resolution", "Before image", "Overlap"} <= {c["name"] for c in al["checks"]}
+    for w in ("after", "before_placed", "before_auto"):
+        assert (uploads.folder(uid) / f"preview_{w}.jpg").exists()
+    k = al["preview"]["scale"]
+    # three pairs that say: the before image sits 8 px west of where it should be
+    pts = [[x * k, y * k, (x + 8) * k, y * k] for x, y in ((100, 100), (800, 700), (300, 900))]
+    al = uploads.manual_align(uid, pts, "tester")
+    assert al["choice"] == "manual" and abs(al["manual"]["shift_m"] - 8 * al["pixel_size_m"]) < 0.05 and al["manual"]["rms_m"] < 0.01
+    assert abs(al["manual"]["rotation_deg"]) < 1e-6 and abs(al["manual"]["scale"] - 1) < 1e-6
+    with pytest.raises(imagery.ImageryError):
+        uploads.choose_alignment(uid, "nonsense")
+    uploads.choose_alignment(uid, "auto")
+    uploads.confirm_alignment(uid, "tester")
+    with pytest.raises(imagery.ImageryError):
+        uploads.manual_align(uid, pts, "tester")                     # closed once confirmed
+    rec = uploads.process(uid)
+    assert rec["scene"]["before"]["choice"] == "auto" and any("checked by tester" in n for n in rec["scene"]["notes"])

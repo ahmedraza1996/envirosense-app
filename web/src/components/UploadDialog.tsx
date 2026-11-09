@@ -77,6 +77,7 @@ export default function UploadDialog({ models, onClose, onCreated }: Props) {
     form.append("disaster_type", type);
     form.append("event_date", date);
     form.append("model_id", model);
+    form.append("review_alignment", "true");
     if (needCorners) CORNERS.forEach((c) => form.append(c, corners[c] ?? ""));
     if (needBeforeCorners) CORNERS.forEach((c) => form.append(`before_${c}`, beforeCorners[c] ?? ""));
     setBusy(true);
@@ -94,8 +95,12 @@ export default function UploadDialog({ models, onClose, onCreated }: Props) {
       <form onSubmit={submit}>
         <header>
           <h1>Upload imagery</h1>
-          <p className="meta">The after image is assessed for damage. Its location is used to find a before image, which
-            shows where buildings stood.</p>
+          <ol className="steps compact" aria-label="Progress">
+            <li className="current"><span className="step-dot">1</span>Upload</li><li><span className="step-dot">2</span>Check alignment</li>
+            <li><span className="step-dot">3</span>Assess</li><li><span className="step-dot">4</span>Review alerts</li>
+          </ol>
+          <p className="meta">The after image is assessed for damage. The before image shows where buildings stood: upload it with the after image,
+            or leave it out and one is looked for in the archive. Next you will see the two images on top of each other and confirm that they line up.</p>
           {policy && <p className="meta note">{policy}</p>}
         </header>
 
@@ -158,7 +163,7 @@ export default function UploadDialog({ models, onClose, onCreated }: Props) {
         <footer>
           <button type="button" className="button" onClick={onClose} disabled={busy}>Cancel</button>
           <button type="submit" className="button primary" disabled={busy || !after || !model}>
-            {busy ? "Uploading…" : "Start assessment"}
+            {busy ? "Uploading…" : "Upload and check alignment"}
           </button>
         </footer>
       </form>

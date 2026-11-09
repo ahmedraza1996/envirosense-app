@@ -1,12 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  AlertTriangle, BadgeCheck, Building2, Check, ClipboardCheck, Copy, Cpu, KeyRound, Lock, LucideIcon, Network, Pencil, Plus, RefreshCw, ScrollText, Search,
+  BadgeCheck, Building2, Check, ClipboardCheck, Copy, Cpu, KeyRound, Lock, LucideIcon, Network, Pencil, Plus, RefreshCw, ScrollText, Search,
   ShieldCheck, SlidersHorizontal, Trash2, UserCheck, UserPlus, Users as UsersIcon, UserX, XCircle,
 } from "lucide-react";
 import {
   accounts, ApprovalOutcome, ApprovalRequest, ApprovedModel, AuditEntry, PermissionCatalogue, RoleInfo, UnitInfo, User,
 } from "../api";
-import { AccountChip } from "./Account";
 import { Avatar, Badge, Button, Card, Empty, Field, IconButton, Modal, Notice, PageHeader, roleTone, Tone, when } from "../ui";
 
 const msg = (e: unknown) => String(e).replace(/^Error: /, "");
@@ -44,7 +43,7 @@ function TemporaryPassword({ who, pw, onClose }: { who: string; pw: string; onCl
 const unitName = (path: string) => path.split(" > ").pop() ?? path;
 const unitParent = (path: string) => path.split(" > ").slice(0, -1).pop();
 
-function Users({ me }: { me: User }) {
+export function Users({ me }: { me: User }) {
   const users = useLoad(accounts.users), units = useLoad(accounts.units), roles = useLoad(accounts.roles);
   const { error, setError, run } = useAction(() => { users.reload(); units.reload(); });
   const [q, setQ] = useState(""), [roleF, setRoleF] = useState(""), [statusF, setStatusF] = useState("");
@@ -152,7 +151,7 @@ function Users({ me }: { me: User }) {
 
 /* ------------------------------------------------------------------------------------------------ Units */
 
-function Units() {
+export function Units() {
   const units = useLoad(accounts.units);
   const { error, setError, run } = useAction(() => units.reload());
   const [dialog, setDialog] = useState<{ mode: "add" | "edit"; unit?: UnitInfo; parent?: string } | null>(null);
@@ -238,7 +237,7 @@ function PermissionPicker({ catalogue, held, onChange }: { catalogue: Permission
   );
 }
 
-function Roles() {
+export function Roles() {
   const roles = useLoad(accounts.roles), cat = useLoad(accounts.permissions);
   const { error, setError, run } = useAction(() => roles.reload());
   const [note, setNote] = useState<string | null>(null);
@@ -340,7 +339,7 @@ function summary(r: ApprovalRequest) {
   return { change, reason: p.reason };
 }
 
-function Approvals({ me, onChange }: { me: User; onChange: () => void }) {
+export function Approvals({ me, onChange }: { me: User; onChange: () => void }) {
   const list = useLoad(() => accounts.approvals());
   const { error, setError, run } = useAction(() => { list.reload(); onChange(); });
   const [tab, setTab] = useState<"waiting" | "decided">("waiting");
@@ -419,7 +418,7 @@ function Approvals({ me, onChange }: { me: User; onChange: () => void }) {
 
 /* ------------------------------------------------------------------------------------------------ Approved model */
 
-function ModelApproval() {
+export function ModelApproval() {
   const cur = useLoad<ApprovedModel>(accounts.approvedModel);
   const [pick, setPick] = useState(""), [reason, setReason] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -508,62 +507,5 @@ export function AuditView() {
         </div>
       </Card>
     </>
-  );
-}
-
-/* ------------------------------------------------------------------------------------------------ Console */
-
-type Tab = "users" | "units" | "roles" | "approvals" | "model" | "audit";
-const NAV: { id: Tab; label: string; icon: LucideIcon; group: string }[] = [
-  { id: "users", label: "Users", icon: UsersIcon, group: "Access" }, { id: "units", label: "Units", icon: Network, group: "Access" }, { id: "roles", label: "Roles", icon: ShieldCheck, group: "Access" },
-  { id: "approvals", label: "Approvals", icon: ClipboardCheck, group: "Governance" }, { id: "model", label: "Approved model", icon: Cpu, group: "Governance" }, { id: "audit", label: "Audit log", icon: ScrollText, group: "Governance" },
-];
-
-/** Administrator and auditor console (no imagery): sidebar navigation, one page per area. */
-export default function AdminShell({ user, tabs, onUser, onSignOut }: { user: User; tabs: Tab[]; onUser: (u: User) => void; onSignOut: () => void }) {
-  const [tab, setTab] = useState<Tab>(tabs[0]);
-  const [waiting, setWaiting] = useState(0);
-  const refreshWaiting = useCallback(() => {
-    if (tabs.includes("approvals")) accounts.approvals("pending").then((r) => setWaiting(r.filter((x) => x.can_decide).length)).catch(() => undefined);
-  }, [tabs]);
-  useEffect(refreshWaiting, [refreshWaiting, tab]);
-  const items = NAV.filter((n) => tabs.includes(n.id));
-  const groups = [...new Set(items.map((n) => n.group))];
-  const current = items.find((n) => n.id === tab);
-  return (
-    <div className="console">
-      <aside className="nav">
-        <div className="brand"><span className="logo"><BadgeCheck size={20} aria-hidden /></span><div><strong>EnviroSense</strong><span>{tabs.includes("users") ? "Administration" : "Audit"}</span></div></div>
-        <nav aria-label="Sections">
-          {groups.map((g) => (
-            <div key={g} className="nav-group">
-              <span className="nav-title">{g}</span>
-              {items.filter((n) => n.group === g).map((n) => (
-                <button key={n.id} className="nav-item" aria-current={tab === n.id ? "page" : undefined} onClick={() => setTab(n.id)}>
-                  <n.icon size={18} aria-hidden /><span>{n.label}</span>
-                  {n.id === "approvals" && waiting > 0 && <span className="nav-badge" aria-label={`${waiting} waiting`}>{waiting}</span>}
-                </button>
-              ))}
-            </div>
-          ))}
-        </nav>
-        <div className="nav-foot"><AlertTriangle size={14} aria-hidden /><span>Nothing here shows imagery or alerts.</span></div>
-      </aside>
-      <div className="console-main">
-        <div className="topbar">
-          <nav className="crumbs" aria-label="Location"><span>{tabs.includes("users") ? "Administration" : "Audit"}</span><span className="slash">/</span><span>{current?.label}</span></nav>
-          <div className="spacer" />
-          <AccountChip user={user} onSignOut={onSignOut} onUser={onUser} />
-        </div>
-        <main className="page"><div className="page-inner">
-          {tab === "users" && <Users me={user} />}
-          {tab === "units" && <Units />}
-          {tab === "roles" && <Roles />}
-          {tab === "approvals" && <Approvals me={user} onChange={refreshWaiting} />}
-          {tab === "model" && <ModelApproval />}
-          {tab === "audit" && <AuditView />}
-        </div></main>
-      </div>
-    </div>
   );
 }

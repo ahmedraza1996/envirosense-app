@@ -229,3 +229,22 @@ Tests: 42 pass (7 new in `tests/test_governance.py`, which also covers the appro
 - Sign-in is a two-part page; the forced password change and the change-password dialog share the same form, with show/hide and a length hint.
 - The analyst workspace keeps its map layout and now uses the same controls: review and severity as pills, buttons with icons, export as buttons, rename and delete as icon buttons, calmer detail panel.
 - Checked in the browser as an administrator and as an analyst at 1440 x 900; at widths under 960 px the navigation collapses to icons and the sign-in brand panel is hidden. Not done: dark theme, a pass over the upload dialog and the event view beyond the shared controls, keyboard-shortcut help.
+
+## A18 Alignment check before the assessment; one application frame for every role (2026-11-09)
+- Uploads run in two jobs. The first reads the images, places the before image on the after image's grid by its coordinates, aligns it automatically
+  (learned features, then phase correlation) and runs input checks (location, resolution, size, before image, capture order, overlap, colour difference).
+  The upload then waits in the state "Check alignment"; the assessment job is queued only when a person confirms.
+- The alignment check (`web/src/components/AlignView.tsx`): swipe, blink, overlay and side by side with linked zoom and pan; a grid; quality traffic light
+  with method, matching features, residual and correction; the input checks; a choice of automatic, tie points, coordinates only or after image only.
+  Tie points: pairs clicked in the before and after image give a similarity transform (least squares, exact for two pairs) with per-pair residuals.
+  Confirming records who checked and when; the note goes into the assessment record and the audit log (`confirm_alignment`, `align_upload_manually`).
+- API: `GET /api/uploads/{id}/alignment`, `GET .../preview/{which}`, `POST .../alignment/(manual|choose|confirm)` (migration 0005 adds the route rule).
+  Uploads made through the API without `review_alignment` still run straight through, as before.
+- Every role now uses one frame (`AppShell`): the dark navigation, top bar with crumbs and the account menu. Sections by permission: Assessments, Events and
+  Model check for those who see imagery; Approvals, Approved model and Audit log; Users, Units and Roles for administrators. Assessments is a searchable
+  table with status badges; one assessment opens with a header (back, name, hazard, status, rename, delete) and either the alignment check, progress, or the
+  map with the alerts. The benchmark tiles moved to "Model check" with the mode and model choice in its own toolbar. The long explanation under the alerts
+  is behind "How alerts are made and their limits".
+- Tests: 84 pass (`test_alignment_is_checked_before_the_assessment`; a worker-test race fixed by patching before the job exists). Checked in the browser as
+  an analyst at 1440 x 900 with an upload whose georeference was shifted by 12 px: the automatic alignment corrected it, tie points and confirm work, and
+  the assessment completed with 5 alerts. Not checked: the administrator view in the new frame (a throwaway administrator account was not created).

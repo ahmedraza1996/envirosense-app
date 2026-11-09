@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { Alert, api, Assessment, bestUnet, Context, EventSummary, ModelInfo, Reviews, ReviewStatus, Scene, tileNo, titleCase, Upload, User } from "./api";
-import { BadgeCheck } from "lucide-react";
-import { AccountChip } from "./components/Account";
+import { ArrowLeft, Pencil, Trash2 } from "lucide-react";
 import ScenePanel from "./components/ScenePanel";
-import UploadPanel from "./components/UploadPanel";
 import UploadDialog from "./components/UploadDialog";
+import AlignView, { Steps } from "./components/AlignView";
+import AssessmentList, { StatusBadge } from "./components/AssessmentList";
+import { Section } from "./components/AppShell";
+import { Button, IconButton, Modal, Notice } from "./ui";
 import DamageMap, { MapOptions } from "./components/DamageMap";
 import SummaryPanel from "./components/SummaryPanel";
 import AlertsPanel from "./components/AlertsPanel";
@@ -23,15 +25,23 @@ const preferred = (models: ModelInfo[], mode: Mode) =>
 
 const pending = (u: Upload) => u.status.state === "queued" || u.status.state === "running";
 
-export function Workspace({ user, onUser, onSignOut }: { user: User; onUser: (u: User) => void; onSignOut: () => void }) {
+const SOURCE: Record<string, Source> = { assessments: "upload", events: "events", benchmark: "xbd" };
+
+/** The damage-assessment sections (assessments, events, model check) inside the one application frame. */
+export function Workspace({ user, section, visit, onSection, onCrumb }:
+  { user: User; section: Section; visit: number; onSection: (s: Section) => void; onCrumb: (c: string | null) => void }) {
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [mode, setMode] = useState<Mode>("area");
   const [modelId, setModelId] = useState<string | null>(null);
   const [scenes, setScenes] = useState<Scene[]>([]);
   const [disasters, setDisasters] = useState<string[]>([]);
   const [sceneId, setSceneId] = useState<string | null>(null);
-  const [source, setSource] = useState<Source>("xbd");
+  const [source, setSource] = useState<Source>(SOURCE[section] ?? "upload");
+  const [editing, setEditing] = useState<"rename" | "delete" | null>(null);
+  const [newName, setNewName] = useState("");
+  const [actionError, setActionError] = useState<string | null>(null);
   const [uploads, setUploads] = useState<Upload[]>([]);
+  const [uploadsLoaded, setUploadsLoaded] = useState(false);
   const [uploadId, setUploadId] = useState<string | null>(null);
   const [dialog, setDialog] = useState(false);
   const [assessment, setAssessment] = useState<Assessment | null>(null);
@@ -48,13 +58,13 @@ export function Workspace({ user, onUser, onSignOut }: { user: User; onUser: (u:
   const [eventName, setEventName] = useState<string | null>(null);
 
   useEffect(() => {
-    Promise.all([api.models(), api.scenes("hold"), api.uploads()])
-      .then(([m, s, u]) => {
+    api.uploads().then((u) => { setUploads(u); setUploadsLoaded(true); }).catch((e) => { setError(String(e)); setUploadsLoaded(true); });
+    Promise.all([api.models(), api.scenes("hold")])
+      .then(([m, s]) => {
         setModels(m);
         setModelId(preferred(m, "area") ?? null);
         setScenes(s.scenes);
         setDisasters(s.disasters);
-        setUploads(u);
         const first = [...s.scenes].sort((a, b) => b.severe_true - a.severe_true)[0];
         if (first) setSceneId(first.pair_id);
       })
@@ -159,105 +169,137 @@ export function Workspace({ user, onUser, onSignOut }: { user: User; onUser: (u:
 
   const loadEvents = () => { const m = bestUnet(models); if (m) api.events(m.id).then(setEvents).catch((e) => setError(String(e))); };
   useEffect(() => { if (source === "events") loadEvents(); }, [source, models]);
-  const openTile = (pairId: string) => { setSource("xbd"); setMode("area"); setSceneId(pairId); setSelected(null); setAssessment(null); };
+  const openTile = (pairId: string) => { onSection("benchmark"); setMode("area"); setSceneId(pairId); setSelected(null); setAssessment(null); };
 
   const building = useMemo(() => assessment?.features.find((f) => f.id === selected) ?? null, [assessment, selected]);
   const zoomTo = (p: { centroid_px: [number, number] }) => setFocus({ x: p.centroid_px[0], y: p.centroid_px[1], zoom: 1, key: Date.now() });
   const openAlert = (a: Alert) => { setAlertId(a.alert_id); zoomTo(a); };
 
-  const uploadMessage = source !== "upload" ? undefined
-    : !upload ? "Select an upload, or upload imagery"
-      : upload.status.state === "failed" ? `Upload failed: ${upload.status.error}`
-        : pending(upload) ? `${upload.status.state === "queued" ? "Queued" : upload.status.step ?? "Processing"}…` : undefined;
+  // the navigation decides the section; a click on it (or on its crumb) goes back to the section's start
+  useEffect(() => {
+    const s = SOURCE[section];
+    if (s && s !== source) switchSource(s);
+    if (section === "assessments") { setUploadId(null); setAssessment(null); }
+  }, [section, visit]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    onCrumb(section === "assessments" ? upload?.name ?? null : section === "events" ? (eventName ? titleCase(eventName) : null)
+      : assessment && source === "xbd" ? `${titleCase(assessment.scene.disaster)} · tile ${tileNo(assessment.pair_id)}` : null);
+  }, [section, upload?.name, eventName, assessment?.pair_id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  return (
-    <div className="app">
-      <header className="header">
-        <span className="brand-inline"><span className="logo sm"><BadgeCheck size={16} aria-hidden /></span>EnviroSense</span>
-        <nav className="crumbs" aria-label="Location">
-          {source === "xbd" ? (
-            <>
-              <span>xBD hold set</span>
-              {assessment && (<><span className="slash">/</span><span>{titleCase(assessment.scene.disaster)}</span>
-                <span className="slash">/</span><span>Tile {tileNo(assessment.pair_id)}</span></>)}
-            </>
-          ) : source === "events" ? (
-            <>
-              <span>Events</span>
-              {eventName && (<><span className="slash">/</span><span>{titleCase(eventName)}</span></>)}
-            </>
-          ) : (
-            <>
-              <span>Uploads</span>
-              {upload && (<><span className="slash">/</span><span>{upload.name}</span></>)}
-            </>
-          )}
-        </nav>
-        <div className="spacer" />
-        <div className="segmented" role="group" aria-label="Mode">
-          <button aria-pressed={mode === "area"} onClick={() => switchMode("area")}>Area alerts</button>
-          <button aria-pressed={mode === "building"} onClick={() => switchMode("building")} disabled={source === "upload"}
-            title={source === "upload" ? "The building check needs building outlines; uploads use area alerts" : undefined}>
-            Building check
-          </button>
-        </div>
-        <label className="field-inline">
-          Model
-          {source === "upload" ? (
-            <select value={assessment?.model.id ?? ""} disabled aria-label="Model">
-              <option value={assessment?.model.id ?? ""}>{assessment?.model.label ?? models.find((m) => m.id === upload?.model_id)?.label ?? "–"}</option>
-            </select>
-          ) : (
-            <select value={modelId ?? ""} onChange={(e) => setModelId(e.target.value)} aria-label="Model">
-              {modeModels.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
-            </select>
-          )}
-        </label>
-        <AccountChip user={user} onSignOut={onSignOut} onUser={onUser} />
-      </header>
-      <div className="body">
-        <nav className="sidebar" aria-label="Imagery">
-          <div className="sidebar-tabs">
-            <div className="segmented" role="group" aria-label="Imagery source">
-              <button aria-pressed={source === "xbd"} onClick={() => switchSource("xbd")}>Benchmark</button>
-              <button aria-pressed={source === "upload"} onClick={() => switchSource("upload")}>
-                Uploads{uploads.length > 0 && <span className="tab-count">{uploads.length}</span>}
-              </button>
-              <button aria-pressed={source === "events"} onClick={() => switchSource("events")}>Events</button>
-            </div>
-          </div>
-          {source === "xbd"
-            ? <ScenePanel scenes={scenes} disasters={disasters} sceneId={sceneId} onScene={setSceneId} />
-            : source === "upload"
-              ? <UploadPanel uploads={uploads} uploadId={uploadId} onUpload={setUploadId} onNew={() => setDialog(true)} onRename={rename} onDelete={remove} />
-              : <EventList events={events} selected={eventName} onSelect={setEventName} model={bestUnet(models)} />}
-        </nav>
-        {source === "events" ? (
-          <EventView disaster={eventName} modelId={bestUnet(models)?.id ?? null} onTile={openTile} onChanged={loadEvents} />
+  const mapAndPanel = (message?: string) => (
+    <>
+      <DamageMap
+        assessment={assessment} loading={loading} error={error} options={opts} onOptions={setOpts} message={message}
+        selected={selected} onSelect={setSelected} focus={focus} mode={mode} scenes={scenes}
+        onScene={(id) => { onSection("benchmark"); setSceneId(id); }} reviews={reviews} alertId={alertId} context={context}
+        onAssessment={(a) => { setAssessment(a); setContext(null); setContextTick((t) => t + 1); }}
+      />
+      <aside className="detail">
+        {building && assessment ? (
+          <BuildingInspector assessment={assessment} feature={building} onBack={() => setSelected(null)} />
+        ) : mode === "area" ? (
+          <AlertsPanel assessment={assessment} loading={loading || (!!upload && pending(upload))} onAlert={openAlert}
+            alertId={alertId} reviews={reviews} onReview={review} context={context} user={user} />
         ) : (
-          <>
-            <DamageMap
-              assessment={assessment} loading={loading} error={error} options={opts} onOptions={setOpts} message={uploadMessage}
-              selected={selected} onSelect={setSelected} focus={focus} mode={mode} scenes={scenes}
-              onScene={(id) => { switchSource("xbd"); setSceneId(id); }} reviews={reviews} alertId={alertId} context={context} onAssessment={(a) => { setAssessment(a); setContext(null); setContextTick((t) => t + 1); }}
-            />
-            <aside className="detail">
-              {building && assessment ? (
-                <BuildingInspector assessment={assessment} feature={building} onBack={() => setSelected(null)} />
-              ) : mode === "area" ? (
-                <AlertsPanel assessment={assessment} loading={loading || (!!upload && pending(upload))} onAlert={openAlert}
-                  alertId={alertId} reviews={reviews} onReview={review} context={context} user={user} />
-              ) : (
-                <SummaryPanel assessment={assessment} loading={loading} onZone={zoomTo} onBuilding={setSelected} />
-              )}
-            </aside>
-          </>
+          <SummaryPanel assessment={assessment} loading={loading} onZone={zoomTo} onBuilding={setSelected} />
         )}
+      </aside>
+    </>
+  );
+
+  const created = (u: Upload) => { setDialog(false); setUploads((xs) => [u, ...xs.filter((x) => x.id !== u.id)]); setUploadId(u.id); };
+  const dialogEl = dialog && <UploadDialog models={models} onClose={() => setDialog(false)} onCreated={created} />;
+
+  if (section === "events") {
+    return (
+      <div className="work-grid events">
+        <nav className="sidebar" aria-label="Events"><EventList events={events} selected={eventName} onSelect={setEventName} model={bestUnet(models)} /></nav>
+        <EventView disaster={eventName} modelId={bestUnet(models)?.id ?? null} onTile={openTile} onChanged={loadEvents} />
       </div>
-      {dialog && (
-        <UploadDialog models={models} onClose={() => setDialog(false)}
-          onCreated={(u) => { setDialog(false); setUploads((xs) => [u, ...xs.filter((x) => x.id !== u.id)]); switchSource("upload"); setUploadId(u.id); }} />
+    );
+  }
+
+  if (section === "benchmark") {
+    return (
+      <div className="work-col">
+        <div className="work-head">
+          <div className="work-title"><h1>Model check</h1><p>Benchmark tiles with known damage, to see how well each model does.</p></div>
+          <div className="work-tools">
+            <div className="segmented" role="group" aria-label="Mode">
+              <button aria-pressed={mode === "area"} onClick={() => switchMode("area")}>Area alerts</button>
+              <button aria-pressed={mode === "building"} onClick={() => switchMode("building")}>Building check</button>
+            </div>
+            <label className="field-inline">Model
+              <select value={modelId ?? ""} onChange={(e) => setModelId(e.target.value)} aria-label="Model">
+                {modeModels.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
+              </select>
+            </label>
+          </div>
+        </div>
+        <div className="work-grid three">
+          <nav className="sidebar" aria-label="Benchmark tiles"><ScenePanel scenes={scenes} disasters={disasters} sceneId={sceneId} onScene={setSceneId} /></nav>
+          {mapAndPanel()}
+        </div>
+      </div>
+    );
+  }
+
+  // Assessments: the list, or one assessment (alignment check, progress, or the results)
+  if (!upload) {
+    return (
+      <div className="work-page">
+        <AssessmentList uploads={uploads} loading={!uploadsLoaded} onOpen={setUploadId} onNew={() => setDialog(true)} />
+        {dialogEl}
+      </div>
+    );
+  }
+  const st = upload.status;
+  const startEdit = (m: "rename" | "delete") => { setEditing(m); setNewName(upload.name); setActionError(null); };
+  const runEdit = async () => {
+    setActionError(null);
+    try { if (editing === "rename") await rename(upload.id, newName); else await remove(upload.id); setEditing(null); }
+    catch (e) { setActionError(String(e).replace(/^Error: /, "")); }
+  };
+  return (
+    <div className="work-col">
+      <div className="work-head">
+        <div className="work-title row">
+          <IconButton icon={ArrowLeft} label="All assessments" onClick={() => setUploadId(null)} />
+          <div>
+            <h1>{upload.name}</h1>
+            <p>{titleCase(upload.disaster_type)}{upload.event_date ? ` · event ${upload.event_date}` : ""} · uploaded {upload.created_utc.slice(0, 10)}</p>
+          </div>
+          <StatusBadge u={upload} />
+        </div>
+        <div className="work-tools">
+          <IconButton icon={Pencil} label="Rename" onClick={() => startEdit("rename")} />
+          <IconButton icon={Trash2} tone="danger" label={pending(upload) ? "Wait until processing has finished" : "Delete"} disabled={pending(upload)} onClick={() => startEdit("delete")} />
+        </div>
+      </div>
+      {st.state === "review" ? (
+        <AlignView key={upload.id} upload={upload} onConfirmed={(u) => setUploads((xs) => xs.map((x) => (x.id === u.id ? u : x)))} />
+      ) : st.state === "done" ? (
+        <div className="work-grid two">{mapAndPanel()}</div>
+      ) : (
+        <div className="work-message">
+          <section className="card progress-card">
+            <Steps current={st.state === "failed" ? 2 : 2} />
+            {st.state === "failed"
+              ? <Notice tone="error">The assessment failed: {st.error}</Notice>
+              : <><div className="spinner" aria-hidden /><h2>{st.state === "queued" ? "Waiting to start" : st.step || "Working"}…</h2>
+                <p className="subtle">Detecting buildings and damage takes about a minute per square kilometre. You can leave this page; the result appears in the list.</p></>}
+          </section>
+        </div>
       )}
+      <Modal open={editing !== null} title={editing === "rename" ? "Rename assessment" : "Delete assessment"} onClose={() => setEditing(null)}
+        footer={<><Button onClick={() => setEditing(null)}>Cancel</Button>
+          <Button variant={editing === "delete" ? "danger" : "primary"} onClick={() => void runEdit()}>{editing === "rename" ? "Save" : "Delete"}</Button></>}>
+        {editing === "rename"
+          ? <label className="field"><span>Name</span><input type="text" value={newName} maxLength={80} autoFocus onChange={(e) => setNewName(e.target.value)} /></label>
+          : <p>Delete <strong>{upload.name}</strong> with its images, alerts and reviews? This cannot be undone.</p>}
+        {actionError && <Notice tone="error">{actionError}</Notice>}
+      </Modal>
+      {dialogEl}
     </div>
   );
 }

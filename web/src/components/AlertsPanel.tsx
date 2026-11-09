@@ -189,18 +189,21 @@ export default function AlertsPanel({ assessment: a, loading, onAlert, alertId, 
           </table>
         ) : <p className="empty-note" style={{ marginTop: 8 }}>No area meets the alert rule {upload ? "in this image" : "on this tile"}.</p>}
         {selIndex >= 0 && <ReviewCard alert={alerts[selIndex]} index={selIndex + 1} entry={entryOf(alerts[selIndex].alert_id)} context={context} onReview={onReview} user={user} />}
-        <p className="meta" style={{ marginTop: 10 }}>
-          An alert is raised for at least 250 m² of severely damaged roof with damage within 30 m; high when at least half
-          of the building area there is severely damaged. Click a row to zoom and review it; alerts stay drafts until confirmed.
-          {counts && alerts.length > 0 && <> Review: {counts.confirmed} confirmed, {counts.proposed} awaiting approval, {counts.needs_info} need information, {counts.pending} draft, {counts.dismissed} dismissed.</>}
-        </p>
-        {alerts.length > 0 && !can(user, "export") && <p className="meta">Exports need an approving officer.</p>}
+        {counts && alerts.length > 0 && (
+          <p className="review-tally">{counts.confirmed} confirmed · {counts.proposed} awaiting approval · {counts.needs_info} need information · {counts.pending} draft · {counts.dismissed} dismissed</p>
+        )}
         {alerts.length > 0 && can(user, "export") && <ExportBar aid={a.id} hasDismissed={((counts?.dismissed ?? 0) + (counts?.retracted ?? 0)) > 0} />}
         {(a.gates ?? []).some((g) => g.level === "warn") && (
           <ul className="context gates">{(a.gates ?? []).filter((g) => g.level === "warn").map((g) => <li key={g.code} className="flag">{g.message}</li>)}</ul>
         )}
-        {(a.gates ?? []).filter((g) => g.level === "info" && g.code !== "DRAFT_ONLY").map((g) => <p key={g.code} className="meta">{g.message}</p>)}
-        {a.gates && <p className="meta">Draft for analyst review: visible damage only, verify in the field. Not for dispatch or safety decisions.</p>}
+        <details className="about">
+          <summary>How alerts are made and their limits</summary>
+          <p className="meta">An alert is raised for at least 250 m² of severely damaged roof with damage within 30 m; high when at least half
+            of the building area there is severely damaged. Click a row to zoom and review it; alerts stay drafts until confirmed.</p>
+          {alerts.length > 0 && !can(user, "export") && <p className="meta">Exports need an approving officer.</p>}
+          {(a.gates ?? []).filter((g) => g.level === "info" && g.code !== "DRAFT_ONLY").map((g) => <p key={g.code} className="meta">{g.message}</p>)}
+          {a.gates && <p className="meta">Draft for analyst review: visible damage only, verify in the field. Not for dispatch or safety decisions.</p>}
+        </details>
       </section>
 
       {upload && <BeforeImage a={a} />}

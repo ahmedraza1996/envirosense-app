@@ -129,15 +129,16 @@ def test_a_job_is_claimed_once_and_a_dead_worker_is_recovered(make_upload):
 def test_the_worker_records_steps_and_the_result(make_upload, monkeypatch):
     top = next(iter(auth.units()))
     uid = make_upload(top, "t", "run", job=None)
-    with dbe.tx() as conn:
-        dbe.run(conn, "INSERT INTO ingest.jobs (upload_id) VALUES (:u)", u=uid)
 
     def fake_process(u):
         uploads.set_status(u, step="Reading after image")
         uploads.set_status(u, step="Raising area alerts")
         return {"id": f"{u}__m__area", "alerts": [1, 2]}
+    # patched before the job exists: a worker thread left running by an earlier test must not pick it up with the real pipeline
     monkeypatch.setattr(uploads, "process", fake_process)
     monkeypatch.setattr(uploads, "POLL_S", 0.05)
+    with dbe.tx() as conn:
+        dbe.run(conn, "INSERT INTO ingest.jobs (upload_id) VALUES (:u)", u=uid)
     uploads._ensure_worker()
     for _ in range(100):
         if uploads.info(uid)["status"]["state"] == "done":
@@ -245,7 +246,7 @@ def test_built_in_roles_and_the_route_policy_are_rows_with_the_rights_they_alway
     assert auth.perms_of("officer") == auth.perms_of("analyst") | {"approve", "export", "delete_upload"}
     assert auth.required("GET", "/api/health") == "public" and auth.required("DELETE", "/api/uploads/upl_00000001") == "delete_own_upload"
     assert auth.required("GET", "/api/not-a-route") is None
-    assert sql("SELECT count(*) AS n FROM iam.route_policy") == [{"n": 29}]
+    assert sql("SELECT count(*) AS n FROM iam.route_policy") == [{"n": 30}]
 
 
 def test_an_administrator_creates_a_role_and_a_user_holding_it_gets_exactly_those_rights():

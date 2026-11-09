@@ -49,7 +49,21 @@ export interface BeforeInfo {
 export interface Upload {
   id: string; name: string; disaster_type: string; event_date: string | null; model_id: string; created_utc: string;
   after_file: string; before_file: string | null;
-  status: { state: "queued" | "running" | "done" | "failed"; step?: string; error?: string; assessment_id?: string; alerts?: number };
+  status: { state: "queued" | "running" | "review" | "done" | "failed"; step?: string; error?: string; assessment_id?: string; alerts?: number };
+}
+
+export type AlignChoice = "auto" | "manual" | "placed" | "after_only";
+export type CheckLevel = "ok" | "warn" | "fail";
+export interface Alignment {
+  state: "review" | "confirmed"; choice: AlignChoice; version: number;
+  source: BeforeInfo | { kind: string; tiles?: { tile: string; capture_date: string; covers: number }[]; file?: string };
+  auto: BeforeInfo & { rms_px?: number | null };
+  auto_notes: string[]; notes: string[];
+  quality: { level: "good" | "check" | "poor" | "none"; text: string };
+  manual: null | { pairs: number[][]; rotation_deg: number; scale: number; shift_m: number; residuals_m: number[]; rms_m: number; coverage: number; by: string; utc: string };
+  checks: { name: string; level: CheckLevel; text: string }[];
+  pixel_size_m: number; preview: { scale: number; width: number; height: number };
+  confirmed_by: string | null; confirmed_utc: string | null;
 }
 
 export type ReviewStatus = "pending" | "proposed" | "confirmed" | "dismissed" | "needs_info" | "retracted";
@@ -183,6 +197,13 @@ export const api = {
   editUpload: (id: string, patch: { name?: string; disaster_type?: string; event_date?: string }) =>
     fetch(`/api/uploads/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json", }, body: JSON.stringify(patch) }).then(json<Upload>),
   deleteUpload: (id: string) => fetch(`/api/uploads/${id}`, { method: "DELETE" }).then(json<{ deleted: string }>),
+  alignment: (id: string) => fetch(`/api/uploads/${id}/alignment`).then(json<Alignment>),
+  previewUrl: (id: string, which: "after" | "before_placed" | "before_auto" | "before_manual", v: number) => `/api/uploads/${id}/preview/${which}?v=${v}`,
+  alignManually: (id: string, pairs: number[][]) =>
+    fetch(`/api/uploads/${id}/alignment/manual`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ pairs }) }).then(json<Alignment>),
+  chooseAlignment: (id: string, choice: AlignChoice) =>
+    fetch(`/api/uploads/${id}/alignment/choose`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ choice }) }).then(json<Alignment>),
+  confirmAlignment: (id: string) => fetch(`/api/uploads/${id}/alignment/confirm`, { method: "POST" }).then(json<Upload>),
   events: (model: string) => fetch(`/api/events?model_id=${model}`).then(json<EventSummary[]>),
   event: (disaster: string, model: string) => fetch(`/api/events/${disaster}?model_id=${model}`).then(json<EventDetail>),
   assessEvent: (disaster: string, model_id: string, limit: number) =>
