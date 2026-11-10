@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from ..db import semantic
-from . import accounts, audit, auth, catalogue_routes, context, engines, events, geocal, geoimage, report, reviews, service, uploads
+from . import accounts, audit, auth, catalogue_routes, context, engines, events, geocal, geoimage, report, reviews, seed, service, uploads
 from .scenes import catalogue, image_jpeg, scene
 
 
@@ -377,6 +377,7 @@ def get_policy():
 
 @app.on_event("startup")
 def _retention():
+    seed.ensure()                                             # demo accounts (on unless ENVIROSENSE_DEMO_ACCOUNTS=0); before bootstrap, which then has nothing to do
     auth.bootstrap()
     auth.purge_sessions()
     semantic.sync_models(service.models(), engines.APPROVED)

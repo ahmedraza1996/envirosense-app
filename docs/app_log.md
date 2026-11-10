@@ -248,3 +248,12 @@ Tests: 42 pass (7 new in `tests/test_governance.py`, which also covers the appro
 - Tests: 84 pass (`test_alignment_is_checked_before_the_assessment`; a worker-test race fixed by patching before the job exists). Checked in the browser as
   an analyst at 1440 x 900 with an upload whose georeference was shifted by 12 px: the automatic alignment corrected it, tie points and confirm work, and
   the assessment completed with 5 alerts. Not checked: the administrator view in the new frame (a throwaway administrator account was not created).
+
+## A19 Demo accounts at start-up (2026-11-11)
+- `api/seed.py` writes the demo organisation and eight accounts (two administrators, three approving officers, two analysts, one auditor) at
+  every start, all with the password `abc12345`, no forced change, and resets them if changed; it runs before the first-administrator bootstrap.
+  On unless `ENVIROSENSE_DEMO_ACCOUNTS=0`. Changes are written to the audit log (`demo_accounts_seeded`).
+- The sign-in page lists the demo accounts with their role and unit and signs in with one click (`GET /api/auth/demo-accounts`, public,
+  migration 0006 adds the route rule; 404 when switched off).
+- Tests: 2 new in `tests/test_seed.py`. Checked: every account signs in with the shared password and lands in its sections (analyst: the
+  damage-assessment sections; administrator: governance and access, now in the same frame as everyone else).

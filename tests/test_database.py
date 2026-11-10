@@ -246,7 +246,7 @@ def test_built_in_roles_and_the_route_policy_are_rows_with_the_rights_they_alway
     assert auth.perms_of("officer") == auth.perms_of("analyst") | {"approve", "export", "delete_upload"}
     assert auth.required("GET", "/api/health") == "public" and auth.required("DELETE", "/api/uploads/upl_00000001") == "delete_own_upload"
     assert auth.required("GET", "/api/not-a-route") is None
-    assert sql("SELECT count(*) AS n FROM iam.route_policy") == [{"n": 30}]
+    assert sql("SELECT count(*) AS n FROM iam.route_policy") == [{"n": 31}]
 
 
 def test_an_administrator_creates_a_role_and_a_user_holding_it_gets_exactly_those_rights():

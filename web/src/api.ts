@@ -242,12 +242,14 @@ export interface ApprovalRequest {
 }
 export interface ApprovedModel { approval?: ApprovalOutcome; default_model: string | null; approved_utc?: string; approved_by?: string; reason?: string; previous?: string | null; available?: { id: string; label: string }[] }
 export const can = (u: User, perm: string) => u.permissions.includes(perm);
+export interface DemoAccounts { password: string; accounts: { username: string; name: string; role: string; role_label: string; unit: string }[] }
 
 const send = (method: string, url: string, body?: unknown) =>
   fetch(url, { method, headers: body === undefined ? undefined : { "Content-Type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
 
 export const accounts = {
   me: () => fetch("/api/auth/me").then(json<User>),
+  demo: () => fetch("/api/auth/demo-accounts").then((r) => (r.ok ? r.json() as Promise<DemoAccounts> : null)).catch(() => null),
   login: (username: string, password: string) => send("POST", "/api/auth/login", { username, password }).then(json<User>),
   logout: () => send("POST", "/api/auth/logout").then(json<{ ok: boolean }>),
   changePassword: (current: string, next: string) => send("POST", "/api/auth/password", { current, new: next }).then(json<{ ok: boolean }>),

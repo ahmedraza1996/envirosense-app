@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from fastapi.responses import JSONResponse
 
 from ..db import semantic
-from . import approvals, audit, auth, service
+from . import approvals, audit, auth, seed, service
 
 router = APIRouter()
 
@@ -95,6 +95,15 @@ def logout(request: Request, response: Response):
         auth.end_session(token)
     response.delete_cookie(auth.COOKIE, path="/")
     return {"ok": True}
+
+
+@router.get("/api/auth/demo-accounts")
+def demo_accounts():
+    """Demo mode only (ENVIROSENSE_DEMO_ACCOUNTS is not 0): the predefined accounts and their shared password, for the sign-in page."""
+    d = seed.listing()
+    if d is None:
+        raise HTTPException(404, "demo accounts are switched off")
+    return d
 
 
 @router.get("/api/auth/me")

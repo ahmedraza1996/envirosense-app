@@ -1,6 +1,6 @@
 import { FormEvent, ReactNode, useEffect, useRef, useState } from "react";
 import { BadgeCheck, ChevronDown, Eye, EyeOff, KeyRound, LogOut, ScrollText, ShieldCheck, Users, Lock } from "lucide-react";
-import { accounts, User } from "../api";
+import { accounts, DemoAccounts, User } from "../api";
 import { Avatar, Button, Field, Notice } from "../ui";
 
 const msg = (e: unknown) => String(e).replace(/^Error: /, "");
@@ -23,12 +23,14 @@ export function Login({ onUser }: { onUser: (u: User) => void }) {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const submit = async (e: FormEvent) => {
-    e.preventDefault();
+  const [demo, setDemo] = useState<DemoAccounts | null>(null);
+  useEffect(() => { void accounts.demo().then(setDemo); }, []);
+  const signIn = async (u: string, p: string) => {
     setBusy(true);
     setError(null);
-    try { onUser(await accounts.login(username, password)); } catch (err) { setError(msg(err)); } finally { setBusy(false); }
+    try { onUser(await accounts.login(u, p)); } catch (err) { setError(msg(err)); } finally { setBusy(false); }
   };
+  const submit = (e: FormEvent) => { e.preventDefault(); void signIn(username, password); };
   return (
     <main className="signin">
       <section className="signin-brand">
@@ -49,6 +51,21 @@ export function Login({ onUser }: { onUser: (u: User) => void }) {
           <Secret label="Password" autoComplete="current-password" value={password} onChange={setPassword} />
           <Button variant="primary" type="submit" disabled={busy || !username || !password}>{busy ? "Signing in…" : "Sign in"}</Button>
           <p className="hint center">Sessions end when you sign out or an administrator disables the account.</p>
+          {demo && (
+            <div className="demo-accounts">
+              <div className="demo-head"><strong>Demo accounts</strong><span>Password for all: <code>{demo.password}</code></span></div>
+              <ul>
+                {demo.accounts.map((a) => (
+                  <li key={a.username}>
+                    <button type="button" disabled={busy} onClick={() => void signIn(a.username, demo.password)}>
+                      <Avatar name={a.name} size={28} />
+                      <span><strong>{a.username}</strong><small>{a.role_label} · {a.unit}</small></span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </form>
       </section>
     </main>

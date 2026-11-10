@@ -26,6 +26,15 @@ and the caches. The database refers to them; deleting an upload removes both.
 - One-time set-up on a new server: install `postgresql-17 postgresql-17-postgis-3`, run `sudo sh scripts/db_bootstrap.sh`, then
   `cd app && alembic -c alembic.ini upgrade head` with `DATABASE_MIGRATE_URL` set. Data from the file-based version: `python -m app.scripts.db_import_files --apply`.
 
+## Demo accounts
+At every start the backend writes a fixed organisation (National, with Punjab and Sindh below it and Karachi below Sindh) and eight accounts
+to the database (`api/seed.py`): `admin`, `nda.admin` (administrators), `nda.officer`, `punjab.officer`, `sindh.officer` (approving
+officers), `karachi.analyst1`, `karachi.analyst2` (analysts) and `nda.auditor` (auditor). All use the password `abc12345`
+(`ENVIROSENSE_DEMO_PASSWORD`), have no forced password change, and are put back to this role, unit and password at the next start if they
+were changed. The sign-in page lists them for one-click sign-in. Passwords are still stored only as scrypt hashes.
+**Switch this off on any real deployment** with `ENVIROSENSE_DEMO_ACCOUNTS=0`: the accounts are then neither created nor reset, and the
+sign-in page no longer lists them (`GET /api/auth/demo-accounts` answers 404).
+
 ## Roles and permissions
 
 Roles are rows (`iam.roles`), what a role may do is `iam.role_permissions`, and which permission a route needs is `iam.route_policy` (first matching rule wins, a route without a rule is refused).
