@@ -27,11 +27,26 @@ envirosense/            <- envirosense-ai
   app/                  <- envirosense-app (this repo)
 ```
 
-## Run
+## Run it on your own machine (macOS or Linux)
+You need [Docker Desktop](https://www.docker.com/products/docker-desktop/) running, and the **envirosense-ai** checkout set up as in its README
+(`uv sync` and `sh scripts/get_models.sh`). Then, from the project root (`envirosense/`):
+
 ```sh
-app/scripts/setup_node.sh                      # once: Node 22 in .cache/node
-(cd app/web && npm install && npm run build)   # frontend build
-app/scripts/app.sh                             # server on 127.0.0.1:8000 (CPU only)
-uv run python -m pytest app/tests -q           # tests, from the project root
+sh app/scripts/db_docker.sh                                   # 1. database in Docker; writes the connection strings to .env.db
+(cd app && uv run alembic -c alembic.ini upgrade head)        # 2. create the tables
+sh app/scripts/setup_node.sh                                  # 3. Node 22 inside the project (once)
+(cd app/web && PATH="../../.cache/node/bin:$PATH" npm ci && PATH="../../.cache/node/bin:$PATH" npm run build)   # 4. build the web pages
+uv run uvicorn app.api.main:app --host 127.0.0.1 --port 8000  # 5. start
+```
+Open http://127.0.0.1:8000 and pick one of the demo accounts on the sign-in page (password `abc12345`; see `docs/operations.md`).
+Uploads work with any before/after pair, for example the folders in `demo_set/`. The **Events** page also needs the xBD dataset in `data/`.
+
+Next time only step 5 is needed (Docker Desktop must be running). Tests: `uv run python -m pytest app/tests -q`.
+
+**Before any real use:** start with `ENVIROSENSE_DEMO_ACCOUNTS=0` so the shared demo password is switched off.
+
+## On the project server
+```sh
+app/scripts/app.sh                             # server on 127.0.0.1:8000 in the background (CPU only, GPUs stay free for training)
 ```
 From a laptop: `ssh -N -L 127.0.0.1:8765:127.0.0.1:8000 EnviroSense`, then open http://127.0.0.1:8765 (local port 8765 avoids clashes with other services on 8000).
