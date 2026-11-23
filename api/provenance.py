@@ -38,6 +38,18 @@ def software() -> dict:
     return out
 
 
+def app_commit() -> str | None:
+    """The application's own code version (git commit of the app checkout), so a result can be traced to the code that produced it."""
+    import subprocess
+    if "commit" not in _cache:
+        try:
+            _cache["commit"] = subprocess.run(["git", "-C", str(Path(__file__).resolve().parents[1]), "rev-parse", "HEAD"], capture_output=True,
+                                              text=True, timeout=5).stdout.strip() or None
+        except (OSError, subprocess.SubprocessError):
+            _cache["commit"] = None
+    return _cache["commit"]
+
+
 def build(inputs: dict, run_dir: Path, thresholds: dict) -> dict:
     """inputs: {"after": path, "before": path or None or description}. Paths are hashed; other values are kept as given."""
     ins = {}
@@ -46,4 +58,4 @@ def build(inputs: dict, run_dir: Path, thresholds: dict) -> dict:
         if isinstance(v, Path):
             ins[k]["file"] = v.name
     return {"inputs": ins, "checkpoint": {"run": run_dir.name, "file": "best.pt", "sha256": sha256_file(run_dir / "best.pt")},
-            "thresholds": thresholds, "software": software(), "python_executable": Path(sys.executable).name}
+            "thresholds": thresholds, "software": software(), "app_commit": app_commit(), "python_executable": Path(sys.executable).name}

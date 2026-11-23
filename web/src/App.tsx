@@ -150,9 +150,9 @@ export function Workspace({ user, section, visit, onSection, onCrumb }:
     return () => { cancelled = true; clearTimeout(timer); };
   }, [aid, contextTick]);
 
-  const review = async (id: string, status: ReviewStatus, note: string) => {
+  const review = async (id: string, status: ReviewStatus, note: string, seconds?: number, evidenceViewed?: boolean) => {
     if (!aid) return;
-    const e = await api.review(aid, id, status, note);
+    const e = await api.review(aid, id, status, note, seconds, evidenceViewed);
     setReviews((r) => r && { alerts: { ...r.alerts, [id]: { status: e.status, note: e.note, reviewed_by: e.reviewed_by, reviewed_utc: e.reviewed_utc, history: e.history, proposed_by: e.proposed_by } }, counts: e.counts });
   };
 

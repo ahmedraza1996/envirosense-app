@@ -17,11 +17,32 @@ NAMES = ["no-damage", "minor-damage", "major-damage", "destroyed"]
 SEVERE = ("major-damage", "destroyed")
 EDGE_EPS_PX = 0.5       # outline simplification tolerance: well under a pixel, so outlines stay on the building edges
 MIN_AREA_PX = 25        # ignore specks (~5 m2 at 0.45 m/px)
+# The rule's values are thresholds (sem.thresholds: alert_min_severe_m2, alert_eps_m, alert_majority), changed only through an approval request;
+# these are the values used when no database is reachable (offline scripts).
 EPS_M = 30.0            # damage within this distance belongs to one area
 MIN_SEVERE_M2 = 250.0   # severely damaged roof area needed to raise an alert (about three houses)
 MAJORITY = 0.5          # high severity when at least half of the building area is severely damaged
-RULE = (f">= {MIN_SEVERE_M2:g} m2 of severely damaged roof with damage within {EPS_M:g} m; "
-        f"high if >= {MAJORITY:.0%} of the building area is severely damaged")
+RULE_KEYS = ("alert_min_severe_m2", "alert_eps_m", "alert_majority")
+
+
+def rule_text(min_severe_m2: float, eps_m: float, majority: float) -> str:
+    return (f">= {min_severe_m2:g} m2 of severely damaged roof with damage within {eps_m:g} m; "
+            f"high if >= {majority:.0%} of the building area is severely damaged")
+
+
+RULE = rule_text(MIN_SEVERE_M2, EPS_M, MAJORITY)
+
+
+def params() -> dict:
+    """The alert rule in force and its version (the newest threshold row among its three values), so every alert says which rule raised it."""
+    from ..db import semantic
+    try:
+        v = {k: semantic.threshold(k) for k in RULE_KEYS}
+        versions = semantic.threshold_versions(RULE_KEYS)
+    except Exception:  # noqa: BLE001  no database (offline scripts): the built-in values, without a version
+        v, versions = dict(zip(RULE_KEYS, (MIN_SEVERE_M2, EPS_M, MAJORITY))), {}
+    p = {"min_severe_m2": v["alert_min_severe_m2"], "eps_m": v["alert_eps_m"], "majority": v["alert_majority"]}
+    return {**p, "text": rule_text(**p), "version": max(versions.values()) if versions else None, "versions": versions}
 
 
 def pixel_to_lonlat(gt, x, y):
@@ -67,13 +88,16 @@ def structures(loc: np.ndarray, dmg: np.ndarray, dmg_prob: np.ndarray, to_lonlat
     return out, lab
 
 
-def area_alerts(loc: np.ndarray, dmg: np.ndarray, structs: list, pair_id: str, to_lonlat, pixel_m: float, model_id: str):
+def area_alerts(loc: np.ndarray, dmg: np.ndarray, structs: list, pair_id: str, to_lonlat, pixel_m: float, model_id: str, rule: dict | None = None):
     """Alerts from damage *areas*, not structure centroids: touching buildings often merge into one detected
-    structure, so centroid distances are unreliable. Severe-damage pixels are grown by EPS_M / 2 so that damage
-    within EPS_M metres joins one area; an area raises an alert if it holds >= MIN_SEVERE_M2 of severely damaged roof.
-    Severity uses the area share: high if >= MAJORITY of the building area inside it is severely damaged."""
+    structure, so centroid distances are unreliable. Severe-damage pixels are grown by eps_m / 2 so that damage
+    within eps_m metres joins one area; an area raises an alert if it holds >= min_severe_m2 of severely damaged roof.
+    Severity uses the area share: high if >= majority of the building area inside it is severely damaged.
+    rule: the values to use (params()); by default the rule in force."""
+    rule = rule or params()
+    min_m2, eps_m, majority = rule["min_severe_m2"], rule["eps_m"], rule["majority"]
     severe = (loc > 0) & (dmg >= 3)
-    r = max(1, int(round(EPS_M / 2 / pixel_m)))
+    r = max(1, int(round(eps_m / 2 / pixel_m)))
     grown = cv2.dilate(severe.astype(np.uint8), cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1)))
     n, lab = cv2.connectedComponents(grown, connectivity=8)
     cent = np.array([s["centroid_px"] for s in structs]) - 0.5 if structs else np.zeros((0, 2))   # back to pixel indices
@@ -88,7 +112,7 @@ def area_alerts(loc: np.ndarray, dmg: np.ndarray, structs: list, pair_id: str, t
         ys, xs = np.nonzero(severe & region)
         cx, cy = float(xs.mean()) + 0.5, float(ys.mean()) + 0.5
         lon, lat = to_lonlat(cx, cy)
-        if sev_m2 < MIN_SEVERE_M2:
+        if sev_m2 < min_m2:
             below.append({"centroid_px": [cx, cy], "centroid_lat": lat, "centroid_lon": lon, "severe_m2": sev_m2})
             continue
         ring = outline(region, 2.0).tolist()
@@ -97,8 +121,8 @@ def area_alerts(loc: np.ndarray, dmg: np.ndarray, structs: list, pair_id: str, t
         share = sev_px / bld_px if bld_px else 0.0
         alerts.append({
             "alert_id": "AL-" + hashlib.sha1(f"{pair_id}|{lat:.4f}|{lon:.4f}".encode()).hexdigest()[:8].upper(),
-            "severity": "high" if share >= MAJORITY else "medium",
-            "status": "draft: analyst review required", "rule": RULE,
+            "severity": "high" if share >= majority else "medium",
+            "status": "draft: analyst review required", "rule": rule["text"], "rule_version": rule.get("version"),
             "severe_area_m2": sev_m2, "building_area_m2": bld_px * pixel_m ** 2, "severe_share": share,
             "structures": len(inside), "severe": counts["major-damage"] + counts["destroyed"], "counts": counts,
             "centroid_px": [cx, cy], "centroid_lat": lat, "centroid_lon": lon,

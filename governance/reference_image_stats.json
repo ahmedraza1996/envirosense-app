@@ -1,0 +1,36 @@
+{
+  "source": "xBD train + tier3 after images",
+  "images": 600,
+  "seed": 0,
+  "percentiles": [
+    1,
+    99
+  ],
+  "made_utc": "2026-11-23 09:54:40",
+  "ranges": {
+    "brightness": [
+      48.1651,
+      162.6866
+    ],
+    "contrast": [
+      7.1096,
+      47.1628
+    ],
+    "saturation": [
+      39.0173,
+      137.2921
+    ],
+    "sharpness": [
+      56.9238,
+      2345.361
+    ],
+    "blank_share": [
+      0.0,
+      0.004
+    ],
+    "cloud_share": [
+      0.0,
+      0.0397
+    ]
+  }
+}

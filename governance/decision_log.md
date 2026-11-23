@@ -3,6 +3,9 @@
 Every change of default model, threshold, data source or scope, and every release approval, is recorded here (date, decision, reason, who decided, approver).
 Entries are appended, never edited.
 
+Since 23 November 2026 the record is the database table `gov.decisions` (migration 0007 imported the rows below into it; the Decision log page shows it, and
+the database refuses edits and deletions). Model releases are still appended here as well.
+
 | Date | Decision | Reason | Decided by | Approved by |
 | --- | --- | --- | --- | --- |
 | 2026-11-02 | AI governance is a main objective of the project, fitted to every pipeline stage; frameworks are used for alignment, not certification | Proposal objective 2 and research question 6 | Principal investigator | [supervisor, pending] |

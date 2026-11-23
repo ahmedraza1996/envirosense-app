@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  BadgeCheck, Building2, Check, ClipboardCheck, Copy, Cpu, KeyRound, Lock, LucideIcon, Network, Pencil, Plus, RefreshCw, ScrollText, Search,
+  Building2, Check, ClipboardCheck, Copy, Cpu, KeyRound, Lock, LucideIcon, Network, Pencil, Plus, RefreshCw, ScrollText, Search,
   ShieldCheck, SlidersHorizontal, Trash2, UserCheck, UserPlus, Users as UsersIcon, UserX, XCircle,
 } from "lucide-react";
 import {
-  accounts, ApprovalOutcome, ApprovalRequest, ApprovedModel, AuditEntry, PermissionCatalogue, RoleInfo, UnitInfo, User,
+  accounts, ApprovalRequest, AuditEntry, PermissionCatalogue, RoleInfo, UnitInfo, User,
 } from "../api";
 import { Avatar, Badge, Button, Card, Empty, Field, IconButton, Modal, Notice, PageHeader, roleTone, Tone, when } from "../ui";
 
@@ -332,11 +332,14 @@ const STATE: Record<string, { tone: Tone; label: string }> = {
 };
 
 function summary(r: ApprovalRequest) {
-  const p = r.payload as { reason?: string; value?: number; permissions?: string[] };
+  const p = r.payload as { reason?: string; value?: number; permissions?: string[]; gate?: { gate_open: boolean; failed: string[]; missing: string[]; exception: string | null } };
   const change = r.kind === "model_approval" ? <>Make <strong>{r.subject}</strong> the default model</>
     : r.kind === "threshold_change" ? <>Set <strong>{r.subject.replace(/_/g, " ")}</strong> to <strong>{p.value}</strong></>
       : <>Set the permissions of role <strong>{r.subject}</strong> to {(p.permissions ?? []).length ? (p.permissions ?? []).map((x) => <span key={x} className="chip">{x}</span>) : "none"}</>;
-  return { change, reason: p.reason };
+  const gate = p.gate && !p.gate.gate_open
+    ? <Notice tone="warning"><strong>Release gate closed</strong> (missed: {p.gate.failed.join(", ") || "none"}; not measured: {p.gate.missing.join(", ") || "none"}).
+      Written exception: {p.gate.exception}</Notice> : null;
+  return { change, reason: p.reason, gate };
 }
 
 export function Approvals({ me, onChange }: { me: User; onChange: () => void }) {
@@ -366,6 +369,7 @@ export function Approvals({ me, onChange }: { me: User; onChange: () => void }) 
                     <div className="approval-top"><Badge tone="blue">{K.label}</Badge><span className="sub">Request {r.id}</span></div>
                     <p className="approval-change">{s.change}</p>
                     {s.reason && <blockquote>{s.reason}</blockquote>}
+                    {s.gate}
                     <p className="sub"><Avatar name={r.requested_by} size={20} /> {r.requested_by === me.username ? "You" : r.requested_by} asked {when(r.requested_utc)} · expires {r.expires_utc.slice(0, 10)}</p>
                   </div>
                   <div className="approval-actions">
@@ -412,47 +416,6 @@ export function Approvals({ me, onChange }: { me: User; onChange: () => void }) 
         {error && <Notice tone="error">{error}</Notice>}
         <Field label="Reason (required)" wide><input type="text" autoFocus value={note} onChange={(e) => setNote(e.target.value)} /></Field>
       </Modal>
-    </>
-  );
-}
-
-/* ------------------------------------------------------------------------------------------------ Approved model */
-
-export function ModelApproval() {
-  const cur = useLoad<ApprovedModel>(accounts.approvedModel);
-  const [pick, setPick] = useState(""), [reason, setReason] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [done, setDone] = useState<ApprovalOutcome | null>(null);
-  const available = cur.data?.available ?? [];
-  const name = (id?: string | null) => available.find((m) => m.id === id)?.label ?? id ?? "None";
-  const sel = pick || cur.data?.default_model || "";
-  const save = async () => {
-    setError(null); setDone(null);
-    try { const r = await accounts.approveModel(sel, reason); setReason(""); setDone(r.approval ?? null); cur.reload(); } catch (e) { setError(msg(e)); }
-  };
-  return (
-    <>
-      <PageHeader title="Approved model" subtitle="The model used for area alerts and uploads. It is chosen by approval, never by test score." />
-      <div className="two-col">
-        <Card title="Current default">
-          <div className="model-now"><span className="approval-icon"><Cpu size={22} aria-hidden /></span><div><strong>{name(cur.data?.default_model)}</strong><code className="mono-sm">{cur.data?.default_model ?? "none"}</code></div><Badge tone="green" icon={BadgeCheck}>Approved</Badge></div>
-          <dl className="facts">
-            <dt>Approved</dt><dd>{cur.data?.approved_utc ?? "–"}</dd>
-            <dt>By</dt><dd>{cur.data?.approved_by ?? "–"}</dd>
-            <dt>Previous</dt><dd>{name(cur.data?.previous)}</dd>
-            <dt>Reason</dt><dd>{cur.data?.reason ?? "–"}</dd>
-          </dl>
-        </Card>
-        <Card title="Request a change" subtitle="A second administrator approves it before it takes effect; the reason goes to the decision log.">
-          {error && <Notice tone="error">{error}</Notice>}
-          {done && <Notice tone={done.status === "pending" ? "info" : "success"}>{done.status === "pending" ? `Request ${done.id} filed. Another administrator must approve it before the default changes (see Approvals).` : "Default model changed and recorded."}</Notice>}
-          <div className="form-grid single">
-            <Field label="New default"><select value={sel} onChange={(e) => setPick(e.target.value)}>{available.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}</select></Field>
-            <Field label="Reason" hint="At least 10 characters. Cite the experiment and its result."><input type="text" value={reason} onChange={(e) => setReason(e.target.value)} /></Field>
-            <div><Button variant="primary" icon={Check} disabled={sel === cur.data?.default_model || reason.trim().length < 10} onClick={() => void save()}>Submit change</Button></div>
-          </div>
-        </Card>
-      </div>
     </>
   );
 }

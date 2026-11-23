@@ -42,13 +42,15 @@ def register(rec: dict, record_path: Path | None = None, created_by: str | None 
     path = str(record_path.relative_to(ROOT)) if record_path and record_path.is_absolute() and ROOT in record_path.parents else (str(record_path) if record_path else f"runs/app/assessments/{rec['id']}.json")
     with tx() as c:
         mv = one(c, "SELECT id FROM sem.model_versions WHERE id = :m", m=rec["model"]["id"])
-        run(c, "INSERT INTO core.assessments (id, kind, upload_id, scene, model_id, model_version_id, record_path, record_sha256, thresholds, provenance, n_alerts, footprint, created_by) "
+        run(c, "INSERT INTO core.assessments (id, kind, upload_id, scene, model_id, model_version_id, record_path, record_sha256, thresholds, provenance, n_alerts, footprint, "
+               "created_by, abstained, abstain_reasons, rule_version) "
                "VALUES (:id, :kind, :up, :scene, :model, :mv, :path, :sha, CAST(:th AS jsonb), CAST(:pv AS jsonb), :n, "
-               "CASE WHEN CAST(:foot AS text) IS NULL THEN NULL ELSE ST_SetSRID(ST_GeomFromGeoJSON(CAST(:foot AS text)), 4326) END, :by) "
+               "CASE WHEN CAST(:foot AS text) IS NULL THEN NULL ELSE ST_SetSRID(ST_GeomFromGeoJSON(CAST(:foot AS text)), 4326) END, :by, :ab, :abr, :rv) "
                "ON CONFLICT (id) DO UPDATE SET model_version_id = :mv, record_sha256 = :sha, thresholds = CAST(:th AS jsonb), provenance = CAST(:pv AS jsonb), "
-               "n_alerts = :n, footprint = EXCLUDED.footprint",
+               "n_alerts = :n, footprint = EXCLUDED.footprint, abstained = :ab, abstain_reasons = :abr, rule_version = :rv",
             id=rec["id"], kind=kind, up=upload, scene=rec["pair_id"], model=rec["model"]["id"], mv=mv["id"] if mv else None, path=path, sha=sha,
-            th=json.dumps(prov.get("thresholds") or {}), pv=json.dumps(prov, default=str), n=len(alerts), foot=json.dumps(foot) if foot else None, by=created_by)
+            th=json.dumps(prov.get("thresholds") or {}), pv=json.dumps(prov, default=str), n=len(alerts), foot=json.dumps(foot) if foot else None, by=created_by,
+            ab=bool(rec.get("abstained")), abr=[r["code"] for r in rec.get("abstain_reasons") or []], rv=rec.get("alert_rule_version"))
         ids = []
         for a in alerts:
             ids.append(a["alert_id"])

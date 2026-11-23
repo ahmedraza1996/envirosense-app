@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from fastapi.responses import JSONResponse
 
 from ..db import semantic
-from . import approvals, audit, auth, seed, service
+from . import approvals, audit, auth, model_registry, seed, service
 
 router = APIRouter()
 
@@ -13,6 +13,7 @@ router = APIRouter()
 class Login(BaseModel):
     username: str
     password: str
+    code: str | None = None               # two-step sign-in code, when the account has it switched on
 
 
 class PasswordChange(BaseModel):
@@ -61,6 +62,7 @@ class RolePermissions(BaseModel):
 class ModelApproval(BaseModel):
     model_id: str
     reason: str
+    exception: str | None = None          # required when the release gate is closed: why release a model that misses acceptance criteria
 
 
 def _me() -> dict:
@@ -76,7 +78,9 @@ def _managed(unit_id: str):
 @router.post("/api/auth/login")
 def login(body: Login, request: Request, response: Response):
     try:
-        user, token = auth.login(body.username, body.password, request.client.host if request.client else None)
+        user, token = auth.login(body.username, body.password, request.client.host if request.client else None, body.code)
+    except auth.TwoStepNeeded as e:
+        raise HTTPException(401, {"two_step": True, "message": str(e)})
     except auth.AuthError as e:
         audit.log("login_failed", body.username.strip().lower() or "unknown", username=body.username.strip().lower()[:32], reason=str(e),
                   client=request.client.host if request.client else None)
@@ -108,6 +112,41 @@ def demo_accounts():
 
 @router.get("/api/auth/me")
 def me():
+    return _me()
+
+
+class TwoStep(BaseModel):
+    code: str | None = None
+    password: str | None = None
+
+
+@router.post("/api/auth/two-step/setup")
+def two_step_setup():
+    u = auth.current()
+    res = auth.two_step_setup(u["username"])
+    audit.log("two_step_setup", u["username"])
+    return res
+
+
+@router.post("/api/auth/two-step/enable")
+def two_step_enable(body: TwoStep):
+    u = auth.current()
+    try:
+        auth.two_step_enable(u["username"], body.code or "")
+    except auth.AuthError as e:
+        raise HTTPException(400, str(e))
+    audit.log("two_step_enabled", u["username"])
+    return _me()
+
+
+@router.post("/api/auth/two-step/disable")
+def two_step_disable(body: TwoStep):
+    u = auth.current()
+    try:
+        auth.two_step_disable(u["username"], body.password or "")
+    except auth.AuthError as e:
+        raise HTTPException(400, str(e))
+    audit.log("two_step_disabled", u["username"])
     return _me()
 
 
@@ -210,7 +249,10 @@ def reset_password(username: str):
     _managed(rec["unit"])
     pw = auth.temp_password() + "Aa1"
     auth.set_password(username, pw, True)
-    audit.log("password_reset", auth.actor(), user=username)
+    had_two_step = bool(rec.get("two_step"))
+    if had_two_step:                         # a reset is how someone who lost their phone gets back in: they set two-step up again after signing in
+        auth.two_step_clear(username)
+    audit.log("password_reset", auth.actor(), user=username, two_step_cleared=had_two_step)
     return {"username": username, "temporary_password": pw}
 
 
@@ -313,7 +355,11 @@ def approve_model(body: ModelApproval):
     if len(reason) < 10:
         raise HTTPException(400, "give the reason (at least 10 characters)")
     semantic.sync_models(models)
-    res = submit_request("model_approval", body.model_id, {"model_id": body.model_id, "reason": reason})
+    try:
+        gate = model_registry.check_release(body.model_id, body.exception)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    res = submit_request("model_approval", body.model_id, {"model_id": body.model_id, "reason": reason, "gate": gate})
     if res["status"] == "pending":
         return JSONResponse(status_code=202, content={**approved_model(), "approval": res})
     return {**approved_model(), "approval": res}

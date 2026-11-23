@@ -1,0 +1,241 @@
+{
+ "version": 1,
+ "frameworks": [
+  {
+   "key": "eu",
+   "name": "EU AI Act (benchmark)",
+   "role": "Legal checklist for high-risk AI systems, used as a yardstick: the system is operated in Pakistan, so the Act does not apply by law.",
+   "how": "Each article is the acceptance condition of the controls tagged with it. The technical file is produced from the same records (Annex IV style). Status is met when every tagged control is met.",
+   "requirements": [
+    {
+     "id": "Art. 9",
+     "title": "Risk management system"
+    },
+    {
+     "id": "Art. 10",
+     "title": "Data and data governance"
+    },
+    {
+     "id": "Art. 11",
+     "title": "Technical documentation"
+    },
+    {
+     "id": "Art. 12",
+     "title": "Record-keeping (automatic logs)"
+    },
+    {
+     "id": "Art. 13",
+     "title": "Transparency and information to deployers"
+    },
+    {
+     "id": "Art. 14",
+     "title": "Human oversight"
+    },
+    {
+     "id": "Art. 15",
+     "title": "Accuracy, robustness and cybersecurity"
+    },
+    {
+     "id": "Art. 17",
+     "title": "Quality management system"
+    },
+    {
+     "id": "Art. 27",
+     "title": "Fundamental-rights impact assessment (public bodies deploying)"
+    },
+    {
+     "id": "Art. 72",
+     "title": "Post-market monitoring"
+    },
+    {
+     "id": "Art. 73",
+     "title": "Reporting of serious incidents"
+    }
+   ]
+  },
+  {
+   "key": "nist",
+   "name": "NIST AI RMF 1.0",
+   "role": "Voluntary framework; the working loop of the management system.",
+   "how": "Read the control register by function. The status per function is the current profile; the target profile is every function met. No certificate exists.",
+   "requirements": [
+    {
+     "id": "GOVERN",
+     "title": "Policies, roles, accountability and culture"
+    },
+    {
+     "id": "MAP",
+     "title": "Context, intended use, risks and impacts"
+    },
+    {
+     "id": "MEASURE",
+     "title": "Metrics, testing and evaluation"
+    },
+    {
+     "id": "MANAGE",
+     "title": "Treat risks, respond to incidents, monitor and improve"
+    }
+   ]
+  },
+  {
+   "key": "iso",
+   "name": "ISO/IEC 42001 (with 23894 and 42005)",
+   "role": "Certifiable AI management system; here an internal audit against it, no certification sought.",
+   "how": "Clauses 4 to 10 are the governance layer; the Annex A areas are carried by the controls tagged with them. This register is the statement of applicability.",
+   "requirements": [
+    {
+     "id": "Cl. 4",
+     "title": "Context of the organisation"
+    },
+    {
+     "id": "Cl. 5",
+     "title": "Leadership: policy and roles"
+    },
+    {
+     "id": "Cl. 6",
+     "title": "Planning: risk assessment and objectives"
+    },
+    {
+     "id": "Cl. 7",
+     "title": "Support: resources and documented information"
+    },
+    {
+     "id": "Cl. 8",
+     "title": "Operation: impact assessment and life cycle"
+    },
+    {
+     "id": "Cl. 9",
+     "title": "Performance evaluation: monitoring, internal audit"
+    },
+    {
+     "id": "Cl. 10",
+     "title": "Improvement: nonconformity and corrective action"
+    },
+    {
+     "id": "A.2",
+     "title": "Policies related to AI"
+    },
+    {
+     "id": "A.3",
+     "title": "Internal organisation"
+    },
+    {
+     "id": "A.4",
+     "title": "Resources for AI systems"
+    },
+    {
+     "id": "A.5",
+     "title": "Assessing impacts of AI systems"
+    },
+    {
+     "id": "A.6",
+     "title": "AI system life cycle"
+    },
+    {
+     "id": "A.7",
+     "title": "Data for AI systems"
+    },
+    {
+     "id": "A.8",
+     "title": "Information for interested parties"
+    },
+    {
+     "id": "A.9",
+     "title": "Use of AI systems"
+    },
+    {
+     "id": "A.10",
+     "title": "Third-party relationships"
+    },
+    {
+     "id": "ISO 23894",
+     "title": "Risk management method"
+    },
+    {
+     "id": "ISO 42005",
+     "title": "Impact assessment method"
+    }
+   ]
+  },
+  {
+   "key": "oecd",
+   "name": "OECD AI Principles",
+   "role": "Values the system is checked against; the OECD classification framework profiles the system once (governance/impact_assessment.md).",
+   "how": "Each principle points at the controls that put it into practice.",
+   "requirements": [
+    {
+     "id": "1.1",
+     "title": "Inclusive growth, sustainable development and well-being"
+    },
+    {
+     "id": "1.2",
+     "title": "Human rights and democratic values, fairness and privacy"
+    },
+    {
+     "id": "1.3",
+     "title": "Transparency and explainability"
+    },
+    {
+     "id": "1.4",
+     "title": "Robustness, security and safety"
+    },
+    {
+     "id": "1.5",
+     "title": "Accountability"
+    }
+   ]
+  },
+  {
+   "key": "data",
+   "name": "Data governance (DAMA-DMBOK, OCHA Data Responsibility)",
+   "role": "Practice for the training data and the uploaded imagery.",
+   "how": "DAMA knowledge areas and the OCHA data-responsibility guidance as a checklist for the data controls.",
+   "requirements": [
+    {
+     "id": "DAMA quality",
+     "title": "Data quality"
+    },
+    {
+     "id": "DAMA metadata",
+     "title": "Metadata and documentation"
+    },
+    {
+     "id": "DAMA lineage",
+     "title": "Lineage: from input to result"
+    },
+    {
+     "id": "DAMA security",
+     "title": "Data security and access"
+    },
+    {
+     "id": "DAMA retention",
+     "title": "Retention and deletion"
+    },
+    {
+     "id": "OCHA data responsibility",
+     "title": "Humanitarian data responsibility: minimum data, known recipients"
+    }
+   ]
+  },
+  {
+   "key": "pk",
+   "name": "Pakistan (legal setting)",
+   "role": "The laws and policy where the system is used. Status of the data protection bill to be checked against the official text before citing.",
+   "how": "Applies to image intake (rights, privacy), access and security, and the responsible-AI commitments of the national policy.",
+   "requirements": [
+    {
+     "id": "PECA 2016",
+     "title": "Prevention of Electronic Crimes Act 2016 (unauthorised access, data security)"
+    },
+    {
+     "id": "PDP Bill (draft)",
+     "title": "Personal Data Protection Bill (draft)"
+    },
+    {
+     "id": "National AI Policy 2025",
+     "title": "National AI Policy 2025: responsible, human-overseen AI"
+    }
+   ]
+  }
+ ]
+}

@@ -125,12 +125,16 @@ def save_damage_map(dmg, path):
 
 
 def area_record(key: str, scene_info: dict, model_id: str, eng, loc, dmg, dmg_prob, to_lonlat, px_m: float,
-                label_polys=None, scene_metrics=None, extra=None) -> dict:
-    """Structures + area alerts from model maps, as a stored assessment record (benchmark tiles and uploads)."""
+                label_polys=None, scene_metrics=None, extra=None, abstain=None) -> dict:
+    """Structures + area alerts from model maps, as a stored assessment record (benchmark tiles and uploads).
+    abstain: input checks that failed ([{code, message}]); with any of them, or when most structures are below the review confidence, the record
+    abstains: no alert is raised, the would-be alerts are kept as `withheld_alerts` for the record, and the screen says "Not assessed: needs a person"."""
+    from ..db import semantic
     from . import alerts as al
     aid = f"{key}__{model_id}__area"
+    rule = al.params()
     structs, lab = al.structures(loc, dmg, dmg_prob, to_lonlat, px_m)
-    alerts, below = al.area_alerts(loc, dmg, structs, key, to_lonlat, px_m, model_id)
+    alerts, below = al.area_alerts(loc, dmg, structs, key, to_lonlat, px_m, model_id, rule)
     bench = al.benchmark(lab, structs, label_polys or [])
     mode = (extra or {}).get("inference_mode", eng.mode)
     feats = []
@@ -162,15 +166,25 @@ def area_record(key: str, scene_info: dict, model_id: str, eng, loc, dmg, dmg_pr
     else:
         inputs = {"after": XBD / scene_info["split"] / "images" / f"{key}_post_disaster.png",
                   "before": XBD / scene_info["split"] / "images" / f"{key}_pre_disaster.png"}
-    thresholds = {"alert_rule": al.RULE, "review_confidence": review_confidence(), "min_localized": _eng.MIN_LOCALIZED,
-                  "temperature": getattr(eng, "temperature", 1.0), "min_severe_m2": al.MIN_SEVERE_M2, "eps_m": al.EPS_M, "min_area_px": al.MIN_AREA_PX, "majority": al.MAJORITY}
+    reasons = list(abstain or [])
+    share = len(low) / len(feats) if feats else 0.0
+    limit = semantic.threshold("abstain_low_conf_share")
+    if feats and share > limit:
+        reasons.append({"code": "LOW_CONFIDENCE", "message": f"{share:.0%} of the {len(feats)} structures are below the review confidence "
+                                                             f"(more than {limit:.0%}); the model is too unsure here to raise alerts."})
+    withheld = alerts if reasons else []
+    alerts = [] if reasons else alerts
+    thresholds = {"alert_rule": rule["text"], "alert_rule_version": rule["version"], "review_confidence": review_confidence(), "min_localized": _eng.MIN_LOCALIZED,
+                  "temperature": getattr(eng, "temperature", 1.0), "min_severe_m2": rule["min_severe_m2"], "eps_m": rule["eps_m"], "min_area_px": al.MIN_AREA_PX,
+                  "majority": rule["majority"], "abstain_low_conf_share": limit}
     extra = {"provenance": provenance.build(inputs, run_dir, thresholds),
-             "gates": gates.evaluate(scene_info, model_id, _eng.approved_default(models())), **(extra or {})}
+             "gates": gates.evaluate(scene_info, model_id, _eng.approved_default(models()), abstained=reasons), **(extra or {})}
     record = {"id": aid, "kind": "area", "pair_id": key,
               "created_utc": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"), "scene": scene_info,
               "model": {"id": model_id, "label": models()[model_id]["label"], "kind": eng.kind, "mode": mode, **eng.info},
               "review_confidence_threshold": review_confidence(), "summary": zones.summarise(feats),
-              "alerts": alerts, "alert_rule": al.RULE,
+              "alerts": alerts, "alert_rule": rule["text"], "alert_rule_version": rule["version"],
+              "abstained": bool(reasons), "abstain_reasons": reasons, "withheld_alerts": withheld, "low_confidence_share": round(share, 4),
               "below_threshold": below, "isolated_severe": [],
               "zones": [], "benchmark": bench, "scene_metrics": scene_metrics or {},
               "has_damage_map": True, **(extra or {}), "type": "FeatureCollection", "features": feats}

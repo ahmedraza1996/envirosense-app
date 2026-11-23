@@ -46,9 +46,13 @@ export interface BeforeInfo {
   method?: string | null; rotation_deg?: number; scale?: number; matches?: number | null; inliers?: number | null;
 }
 
+export interface InputQuality {
+  stats?: Record<string, number>; reference?: Record<string, [number, number]>; outside?: string[]; unusual?: boolean; empty_share?: number; level?: CheckLevel;
+}
 export interface Upload {
   id: string; name: string; disaster_type: string; event_date: string | null; model_id: string; created_utc: string;
-  after_file: string; before_file: string | null;
+  after_file: string; before_file: string | null; source?: string | null; licence?: string | null; rights_confirmed_by?: string | null;
+  input_quality?: InputQuality; privacy?: { removed: string[]; kept: string };
   status: { state: "queued" | "running" | "review" | "done" | "failed"; step?: string; error?: string; assessment_id?: string; alerts?: number };
 }
 
@@ -71,6 +75,7 @@ export const REVIEW_LABEL: Record<ReviewStatus, string> = {
   pending: "Draft", proposed: "Awaiting approval", confirmed: "Confirmed", dismissed: "Dismissed", needs_info: "Needs information", retracted: "Retracted",
 };
 export interface ReviewHistoryItem { status: ReviewStatus; note: string; by: string; utc: string; role?: string }
+export interface AbstainReason { code: string; message: string }
 export interface ReviewEntry { status: ReviewStatus; note: string; reviewed_by: string | null; reviewed_utc: string | null; history?: ReviewHistoryItem[]; proposed_by?: string | null }
 export interface Gate { code: string; level: "info" | "warn"; message: string }
 
@@ -149,6 +154,9 @@ export interface Assessment {
   isolated_severe: { building_id: string; predicted_class: DamageClass; centroid_px: [number, number]; centroid_lat: number; centroid_lon: number }[];
   scene_metrics: { xview2?: { score: number; loc_f1: number; dmg_f1: number } };
   has_damage_map: boolean; features: Feature[]; gates?: Gate[];
+  abstained?: boolean; abstain_reasons?: AbstainReason[]; withheld_alerts?: Alert[]; alert_rule_version?: number | null; low_confidence_share?: number;
+  provenance?: { app_commit?: string | null; checkpoint?: { run: string; sha256: string | null }; inputs?: Record<string, { sha256?: string | null; source?: string }>;
+    thresholds?: Record<string, unknown> };
 }
 
 async function json<T>(r: Response): Promise<T> {
@@ -186,9 +194,9 @@ export const api = {
   uploads: () => fetch("/api/uploads").then(json<Upload[]>),
   upload: (form: FormData) => fetch("/api/uploads", { method: "POST", body: form }).then(json<Upload>),
   reviews: (aid: string) => fetch(`/api/assessments/${aid}/reviews`).then(json<Reviews>),
-  review: (aid: string, alertId: string, status: ReviewStatus, note: string) =>
+  review: (aid: string, alertId: string, status: ReviewStatus, note: string, seconds?: number, evidence_viewed?: boolean) =>
     fetch(`/api/assessments/${aid}/alerts/${alertId}/review`, {
-      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status, note }),
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status, note, seconds, evidence_viewed }),
     }).then(json<ReviewEntry & { counts: Record<ReviewStatus, number> }>),
   context: (aid: string) => fetch(`/api/assessments/${aid}/context`).then(json<Context>),
   exportUrl: (aid: string, kind: "alerts.geojson" | "structures.geojson" | "csv", include?: string) =>
@@ -229,6 +237,7 @@ export type Role = string;   // a role key: the four built-in roles or one an ad
 export interface User {
   username: string; name: string; role: Role; role_label: string; unit: string; unit_name: string; unit_path: string; active: boolean;
   must_change_password: boolean; created_utc?: string; last_login_utc?: string | null; permissions: string[]; temporary_password?: string | null;
+  two_step?: boolean; two_step_expected?: boolean;
 }
 export interface RoleInfo { key: string; label: string; description: string; builtin: boolean; permissions: string[]; users: number }
 export interface PermissionInfo { key: string; description: string; sensitive: boolean }
@@ -240,7 +249,7 @@ export interface ApprovalRequest {
   id: number; kind: string; subject: string; payload: Record<string, unknown>; state: string; requested_by: string; decided_by: string | null; decision_note: string | null;
   self_approved: boolean; requested_utc: string; expires_utc: string; decided_utc: string | null; description: string; can_decide: boolean; can_withdraw: boolean;
 }
-export interface ApprovedModel { approval?: ApprovalOutcome; default_model: string | null; approved_utc?: string; approved_by?: string; reason?: string; previous?: string | null; available?: { id: string; label: string }[] }
+export interface ApprovedModel { approval?: ApprovalOutcome; gate?: unknown; default_model: string | null; approved_utc?: string; approved_by?: string; reason?: string; previous?: string | null; available?: { id: string; label: string }[] }
 export const can = (u: User, perm: string) => u.permissions.includes(perm);
 export interface DemoAccounts { password: string; accounts: { username: string; name: string; role: string; role_label: string; unit: string }[] }
 
@@ -250,7 +259,18 @@ const send = (method: string, url: string, body?: unknown) =>
 export const accounts = {
   me: () => fetch("/api/auth/me").then(json<User>),
   demo: () => fetch("/api/auth/demo-accounts").then((r) => (r.ok ? r.json() as Promise<DemoAccounts> : null)).catch(() => null),
-  login: (username: string, password: string) => send("POST", "/api/auth/login", { username, password }).then(json<User>),
+  login: async (username: string, password: string, code?: string): Promise<User> => {
+    const r = await send("POST", "/api/auth/login", { username, password, code: code || undefined });
+    if (r.status === 401) {
+      const body = await r.json().catch(() => ({}));
+      if (body?.detail?.two_step) throw new TwoStepNeeded(body.detail.message);
+      throw new Error(typeof body?.detail === "string" ? body.detail : "wrong username or password");
+    }
+    return json<User>(r);
+  },
+  twoStepSetup: () => send("POST", "/api/auth/two-step/setup").then(json<{ secret: string; uri: string }>),
+  twoStepEnable: (code: string) => send("POST", "/api/auth/two-step/enable", { code }).then(json<User>),
+  twoStepDisable: (password: string) => send("POST", "/api/auth/two-step/disable", { password }).then(json<User>),
   logout: () => send("POST", "/api/auth/logout").then(json<{ ok: boolean }>),
   changePassword: (current: string, next: string) => send("POST", "/api/auth/password", { current, new: next }).then(json<{ ok: boolean }>),
   users: () => fetch("/api/admin/users").then(json<User[]>),
@@ -271,5 +291,76 @@ export const accounts = {
   audit: (limit = 300, assessment?: string) => fetch(`/api/audit?limit=${limit}${assessment ? `&assessment=${encodeURIComponent(assessment)}` : ""}`).then(json<AuditEntry[]>),
   auditVerify: () => fetch("/api/audit/verify").then(json<{ ok: boolean; entries: number; first_bad_line: number | null; reason: string }>),
   approvedModel: () => fetch("/api/approved-model").then(json<ApprovedModel>),
-  approveModel: (model_id: string, reason: string) => send("PUT", "/api/admin/approved-model", { model_id, reason }).then(json<ApprovedModel>),
+  approveModel: (model_id: string, reason: string, exception?: string) =>
+    send("PUT", "/api/admin/approved-model", { model_id, reason, exception: exception || undefined }).then(json<ApprovedModel>),
+  thresholds: () => fetch("/api/semantic/thresholds").then(json<Threshold[]>),
+  thresholdHistory: (key: string) => fetch(`/api/semantic/thresholds/${key}/history`).then(json<ThresholdVersion[]>),
+  setThreshold: (key: string, value: number, reason: string) => send("PUT", `/api/admin/thresholds/${key}`, { value, reason }).then(json<{ approval: ApprovalOutcome }>),
+};
+
+export class TwoStepNeeded extends Error {}
+
+// ---- governance ---------------------------------------------------------------------------------------------------
+export interface Threshold { version: number; key: string; value: number; effective_utc: string; set_by: string; decision_ref: string | null; note: string | null;
+  min?: number; max?: number; description?: string }
+export interface ThresholdVersion { value: number; effective_utc: string; set_by: string; decision_ref: string | null; note: string | null }
+export type EvidenceStatus = "ok" | "fail" | "not measured";
+export interface Evidence { type: "test" | "live" | "file" | "file_contains" | "record"; ref?: string; check?: string; status: EvidenceStatus; detail: string }
+export type ControlStatus = "met" | "partly met" | "not met" | "not measured";
+export interface Control { id: string; stage: string; name: string; rule: string; owner: string; evidence: Evidence[]; frameworks: Record<string, string[]>; status: ControlStatus }
+export interface Requirement { id: string; title: string; controls: string[]; status: "met" | "partly met" | "not met" }
+export interface Framework { key: string; name: string; role: string; how: string; requirements: Requirement[]; met: number; partly: number; total: number; score: number | null }
+export interface ControlRegister { checked_utc: string; tests_run_utc: string | null; stages: string[]; controls: Control[]; counts: Record<ControlStatus, number>; frameworks: Framework[] }
+export interface Criterion { id: string; group: string; text: string; metric: string; op: string; value: number | boolean; measured: number | boolean | null; status: "pass" | "fail" | "not measured" }
+export interface Scorecard { model: string; criteria: Criterion[]; passed: number; failed: string[]; missing: string[]; gate_open: boolean }
+export interface RegistryModel { id: string; label: string; run: string; status: "approved" | "candidate" | "retired"; approved_by: string | null; approved_utc: string | null;
+  checkpoint_sha256: string | null; test_score: number | null; hold_score: number | null; passed: number; failed: string[]; missing: string[]; gate_open: boolean; card_saved: boolean }
+export interface Precision { decided: number; confirmed: number; dismissed: number; retracted: number; precision: number | null }
+export interface Monitoring {
+  live_precision: { window: number; floor: number; overall: Precision; by_model: Record<string, Precision>; by_hazard: Record<string, Precision>;
+    dismissal_reasons: { note: string; reviewed_by: string; utc: string }[]; below_floor: boolean; enough_data: boolean };
+  abstention: { days: number; total: number; abstained: number; rate: number | null; reasons: { reason: string; n: number }[] };
+  drift: { ratio: number; last_30_days: { n: number; unusual: number; share: number | null }; previous_30_days: { n: number; unusual: number; share: number | null };
+    rising: boolean; months: { month: string; uploads: number; unusual: number; empty_share: number | null; brightness: number | null }[] };
+  review_behaviour: { seconds: number; confirmations: number; measured: number; quick: number; no_evidence: number; flagged: number; median_seconds: number | null;
+    share_flagged: number | null; by_reviewer: { actor: string; confirmations: number; flagged: number }[] };
+  incidents: { open: number; urgent: number; total: number }; pending_approvals: number;
+}
+export interface IncidentEvent { actor: string; action: string; note: string; utc: string }
+export interface Incident { id: number; kind: string; severity: "low" | "medium" | "high" | "serious"; title: string; description?: string; source: "person" | "check";
+  state: "open" | "investigating" | "closed"; opened_by: string; unit_id: string | null; links: Record<string, string>; opened_utc: string; closed_utc: string | null;
+  cause?: string | null; resolution?: string | null; closed_by?: string | null; events?: IncidentEvent[] }
+export interface Risk { id: string; stage: string; risk: string; cause: string; likelihood: number; severity: number; score: number; controls: string[]; planned: string;
+  owner: string; residual: string; status: "open" | "reduced" | "accepted" | "closed"; next_review: string; overdue: boolean; updated_by: string; updated_utc: string }
+export interface Decision { id: number; utc: string; kind: string; decision: string; reason: string; decided_by: string; approved_by: string | null; ref: string | null }
+export interface DataRegister {
+  datasets: { name: string; use: string; pairs: number; source: string; licence: string; verified: string; hashes: string; datasheet: string }[];
+  uploads: { id: string; name: string; unit_id: string; created_by: string; disaster_type: string; source: string | null; licence: string | null; rights_confirmed_by: string | null;
+    created: string; unusual: boolean | null; empty_share: number | null; metadata_removed: string[] | null; assessments: number; abstained: boolean | null; delete_after: string | null }[];
+  retention_days: number | null; notice: string;
+}
+export interface AccessRow { username: string; name: string; role: string; unit: string; active: boolean; last_login_utc: string | null; two_step: boolean;
+  last_review: { decision: string; note: string; reviewed_by: string; reviewed: string; current: boolean } | null; due: boolean }
+
+export const gov = {
+  controls: () => fetch("/api/gov/controls").then(json<ControlRegister>),
+  technicalFileUrl: "/api/gov/technical-file.md",
+  runChecks: () => send("POST", "/api/gov/checks").then(json<{ raised: Incident[] }>),
+  models: () => fetch("/api/gov/models").then(json<{ models: RegistryModel[]; criteria: { criteria: Criterion[]; written_utc: string } }>),
+  model: (id: string) => fetch(`/api/gov/models/${id}`).then(json<{ id: string; label: string; scorecard: Scorecard; config: Record<string, unknown> }>),
+  card: (id: string) => fetch(`/api/gov/models/${id}/card`).then(json<{ model: string; draft: boolean; markdown: string }>),
+  data: () => fetch("/api/gov/data").then(json<DataRegister>),
+  decisions: () => fetch("/api/gov/decisions").then(json<Decision[]>),
+  monitoring: () => fetch("/api/gov/monitoring").then(json<Monitoring>),
+  incidents: (state?: string) => fetch(`/api/gov/incidents${state ? `?state=${state}` : ""}`).then(json<Incident[]>),
+  incident: (id: number) => fetch(`/api/gov/incidents/${id}`).then(json<Incident>),
+  openIncident: (b: { kind: string; severity: string; title: string; description: string; assessment?: string; alert_id?: string }) =>
+    send("POST", "/api/gov/incidents", b).then(json<Incident>),
+  incidentAction: (id: number, action: "assess" | "note" | "close" | "reopen", b: { note?: string; severity?: string; cause?: string; resolution?: string }) =>
+    send("POST", `/api/gov/incidents/${id}/${action}`, b).then(json<Incident>),
+  risks: () => fetch("/api/gov/risks").then(json<Risk[]>),
+  updateRisk: (id: string, b: Partial<Risk> & { reason: string }) => send("PUT", `/api/gov/risks/${id}`, b).then(json<Risk>),
+  addRisk: (b: Partial<Risk> & { reason: string }) => send("POST", "/api/gov/risks", b).then(json<Risk>),
+  accessReviews: () => fetch("/api/gov/access-reviews").then(json<AccessRow[]>),
+  reviewAccess: (username: string, decision: "keep" | "disable", note: string) => send("POST", "/api/gov/access-reviews", { username, decision, note }).then(json<unknown>),
 };

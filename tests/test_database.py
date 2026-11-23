@@ -193,7 +193,7 @@ def test_semantic_layer_serves_definitions_and_a_changed_threshold_is_versioned_
     assert [k["key"] for k in c.get("/api/semantic/classes").json()] == ["no-damage", "minor-damage", "major-damage", "destroyed"]
     assert {m["key"] for m in c.get("/api/semantic/metrics").json()} >= {"xview2_score", "severe_share", "priority_score"}
     assert any(g["term"] == "four-eyes rule" for g in c.get("/api/semantic/glossary").json())
-    assert c.get("/api/semantic/thresholds").json()[0]["value"] == 0.7
+    assert {t["key"]: t["value"] for t in c.get("/api/semantic/thresholds").json()}["review_confidence"] == 0.7
     ana = {"Authorization": f"Bearer {auth.make_token(_user('sem_analyst', 'analyst'))}"}
     adm = {"Authorization": f"Bearer {auth.make_token(_user('sem_admin', 'admin'))}"}
     only_admin("sem_admin")
@@ -240,13 +240,13 @@ def _admin_headers(name="roles_admin", unit=None, sole=True):
 
 
 def test_built_in_roles_and_the_route_policy_are_rows_with_the_rights_they_always_had():
-    assert auth.perms_of("admin") == {"users", "audit", "model_approve"}
+    assert auth.perms_of("admin") == {"users", "audit", "model_approve", "incident_manage", "risk_manage"}
     assert auth.perms_of("auditor") == {"audit", "review_read"}
     assert auth.perms_of("analyst") == {"view", "assess", "upload", "delete_own_upload", "review", "review_read", "geo_offset"}
-    assert auth.perms_of("officer") == auth.perms_of("analyst") | {"approve", "export", "delete_upload"}
+    assert auth.perms_of("officer") == auth.perms_of("analyst") | {"approve", "export", "delete_upload", "incident_manage"}
     assert auth.required("GET", "/api/health") == "public" and auth.required("DELETE", "/api/uploads/upl_00000001") == "delete_own_upload"
     assert auth.required("GET", "/api/not-a-route") is None
-    assert sql("SELECT count(*) AS n FROM iam.route_policy") == [{"n": 31}]
+    assert sql("SELECT count(*) AS n FROM iam.route_policy") == [{"n": 40}]
 
 
 def test_an_administrator_creates_a_role_and_a_user_holding_it_gets_exactly_those_rights():

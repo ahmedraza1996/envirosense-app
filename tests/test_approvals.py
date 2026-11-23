@@ -36,7 +36,7 @@ def _models(monkeypatch):
 
 def test_with_two_administrators_a_model_change_waits_for_the_other():
     h1, h2 = two_admins()
-    r = c.put("/api/admin/approved-model", headers=h1, json={"model_id": "unet_paired_ext", "reason": "the control run shows the extra epochs decide the score"})
+    r = c.put("/api/admin/approved-model", headers=h1, json={"model_id": "unet_paired_ext", "reason": "the control run shows the extra epochs decide the score", "exception": "test models have no run records; released to test the approval workflow"})
     assert r.status_code == 202 and r.json()["approval"]["status"] == "pending"
     assert semantic.approved_id() == "unet_paired_mis"                              # nothing changed yet
     rid = r.json()["approval"]["id"]
@@ -58,12 +58,12 @@ def test_with_two_administrators_a_model_change_waits_for_the_other():
 
 def test_rejection_needs_a_reason_leaves_everything_as_it_was_and_the_requester_can_withdraw():
     h1, h2 = two_admins()
-    rid = c.put("/api/admin/approved-model", headers=h1, json={"model_id": "unet_paired_ext", "reason": "try the older model for the field test"}).json()["approval"]["id"]
-    assert c.put("/api/admin/approved-model", headers=h1, json={"model_id": "unet_paired_ext", "reason": "asking a second time for it"}).status_code == 409   # one pending per subject
+    rid = c.put("/api/admin/approved-model", headers=h1, json={"model_id": "unet_paired_ext", "reason": "try the older model for the field test", "exception": "test models have no run records; released to test the approval workflow"}).json()["approval"]["id"]
+    assert c.put("/api/admin/approved-model", headers=h1, json={"model_id": "unet_paired_ext", "reason": "asking a second time for it", "exception": "test models have no run records; released to test the approval workflow"}).status_code == 409   # one pending per subject
     assert c.post(f"/api/approvals/{rid}/reject", headers=h2, json={"note": "no"}).status_code == 400
     r = c.post(f"/api/approvals/{rid}/reject", headers=h2, json={"note": "E15 stays until the augmentation run is in"})
     assert r.json()["state"] == "rejected" and semantic.approved_id() == "unet_paired_mis"
-    rid2 = c.put("/api/admin/approved-model", headers=h1, json={"model_id": "unet_paired_ext", "reason": "asking again after the answer"}).json()["approval"]["id"]
+    rid2 = c.put("/api/admin/approved-model", headers=h1, json={"model_id": "unet_paired_ext", "reason": "asking again after the answer", "exception": "test models have no run records; released to test the approval workflow"}).json()["approval"]["id"]
     assert c.post(f"/api/approvals/{rid2}/withdraw", headers=h2).status_code == 403                  # only the requester withdraws
     assert c.post(f"/api/approvals/{rid2}/withdraw", headers=h1).json()["state"] == "withdrawn"
 
@@ -71,7 +71,7 @@ def test_rejection_needs_a_reason_leaves_everything_as_it_was_and_the_requester_
 def test_one_administrator_alone_changes_at_once_and_the_database_refuses_that_flag_once_another_exists():
     h1 = admin("only_admin")
     only_admin("only_admin")
-    r = c.put("/api/admin/approved-model", headers=h1, json={"model_id": "unet_paired_ext", "reason": "no other administrator exists yet"})
+    r = c.put("/api/admin/approved-model", headers=h1, json={"model_id": "unet_paired_ext", "reason": "no other administrator exists yet", "exception": "test models have no run records; released to test the approval workflow"})
     assert r.status_code == 200 and r.json()["approval"]["status"] == "applied" and semantic.approved_id() == "unet_paired_ext"
     row = approvals.get(r.json()["approval"]["id"])
     assert row["self_approved"] and row["state"] == "approved" and row["decided_by"] == "only_admin"
@@ -80,7 +80,7 @@ def test_one_administrator_alone_changes_at_once_and_the_database_refuses_that_f
         with dbe.tx() as conn:
             conn.execute(sa.text("INSERT INTO wf.approval_requests (kind, subject, payload, requested_by, expires_at, state, self_approved, decided_by) "
                                  "VALUES ('model_approval', 'x', '{}', 'only_admin', now() + interval '1 day', 'approved', true, 'only_admin')"))
-    r2 = c.put("/api/admin/approved-model", headers=h1, json={"model_id": "unet_paired_mis", "reason": "back to the other model now"})
+    r2 = c.put("/api/admin/approved-model", headers=h1, json={"model_id": "unet_paired_mis", "reason": "back to the other model now", "exception": "test models have no run records; released to test the approval workflow"})
     assert r2.status_code == 202                                                                       # and the application asks for the second person
 
 

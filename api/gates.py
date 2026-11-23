@@ -6,9 +6,11 @@ Stored with the assessment and shown in the alert panel, the report and the expo
 from .engines import review_confidence
 
 
-def evaluate(scene: dict, model_id: str, approved: str | None, row: dict | None = None) -> list:
+def evaluate(scene: dict, model_id: str, approved: str | None, row: dict | None = None, abstained: list | None = None) -> list:
     g = []
     add = lambda code, level, msg: g.append({"code": code, "level": level, "message": msg})
+    for r in abstained or []:                    # the system declined to assess: first, so it is the first thing anyone reads
+        add("ABSTAINED_" + r["code"], "warn", "Not assessed: " + r["message"])
     b = scene.get("before") or {}
     if scene.get("source") == "upload":
         if b.get("kind") not in (None, "upload", "archive"):

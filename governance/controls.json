@@ -1,0 +1,1573 @@
+{
+ "version": 1,
+ "note": "Each control is a check with a rule, an owner and evidence the application verifies (api/compliance.py). Framework references are alignment targets, not compliance claims.",
+ "stages": [
+  "Governance",
+  "Training data",
+  "Training",
+  "Evaluation",
+  "Model release",
+  "Image intake",
+  "Prediction",
+  "Area alerts",
+  "Human review",
+  "Export",
+  "Monitoring",
+  "Incidents",
+  "Every stage"
+ ],
+ "controls": [
+  {
+   "id": "G1",
+   "stage": "Governance",
+   "name": "Intended use, excluded uses and limits",
+   "rule": "A published statement of what the system is for, what it must not be used for, and its measured limits",
+   "owner": "Principal investigator",
+   "evidence": [
+    {
+     "type": "file",
+     "ref": "governance/intended_use.md"
+    }
+   ],
+   "frameworks": {
+    "eu": [
+     "Art. 13"
+    ],
+    "nist": [
+     "GOVERN",
+     "MAP"
+    ],
+    "iso": [
+     "Cl. 4",
+     "A.8"
+    ],
+    "oecd": [
+     "1.1",
+     "1.3"
+    ],
+    "pk": [
+     "National AI Policy 2025"
+    ]
+   }
+  },
+  {
+   "id": "G2",
+   "stage": "Governance",
+   "name": "Risk register kept up to date",
+   "rule": "Every risk has an owner, controls and a review date; none is past its review date",
+   "owner": "Principal investigator",
+   "evidence": [
+    {
+     "type": "live",
+     "check": "risks_reviewed"
+    }
+   ],
+   "frameworks": {
+    "eu": [
+     "Art. 9"
+    ],
+    "nist": [
+     "MAP",
+     "MANAGE"
+    ],
+    "iso": [
+     "Cl. 6",
+     "ISO 23894"
+    ],
+    "oecd": [
+     "1.4"
+    ]
+   }
+  },
+  {
+   "id": "G3",
+   "stage": "Governance",
+   "name": "Roles and accountability",
+   "rule": "Who does, approves and checks each stage, and who may not",
+   "owner": "Principal investigator",
+   "evidence": [
+    {
+     "type": "file",
+     "ref": "governance/roles.md"
+    }
+   ],
+   "frameworks": {
+    "eu": [
+     "Art. 17"
+    ],
+    "nist": [
+     "GOVERN"
+    ],
+    "iso": [
+     "Cl. 5",
+     "A.3"
+    ],
+    "oecd": [
+     "1.5"
+    ],
+    "pk": [
+     "National AI Policy 2025"
+    ]
+   }
+  },
+  {
+   "id": "G4",
+   "stage": "Governance",
+   "name": "Decision log",
+   "rule": "Every change of model, threshold, role or scope is a row with its reason and the people who took it; rows cannot be changed",
+   "owner": "Principal investigator",
+   "evidence": [
+    {
+     "type": "test",
+     "ref": "tests/test_governance_modules.py::test_decisions_are_recorded_and_cannot_be_changed"
+    }
+   ],
+   "frameworks": {
+    "eu": [
+     "Art. 17"
+    ],
+    "nist": [
+     "GOVERN"
+    ],
+    "iso": [
+     "Cl. 7"
+    ],
+    "oecd": [
+     "1.5"
+    ]
+   }
+  },
+  {
+   "id": "G5",
+   "stage": "Governance",
+   "name": "AI policy",
+   "rule": "The organisation's rules for building and using AI in this system, and the frameworks it is measured against",
+   "owner": "Principal investigator",
+   "evidence": [
+    {
+     "type": "file",
+     "ref": "governance/ai_policy.md"
+    }
+   ],
+   "frameworks": {
+    "nist": [
+     "GOVERN"
+    ],
+    "iso": [
+     "Cl. 5",
+     "A.2"
+    ],
+    "oecd": [
+     "1.5"
+    ],
+    "pk": [
+     "National AI Policy 2025"
+    ]
+   }
+  },
+  {
+   "id": "G6",
+   "stage": "Governance",
+   "name": "Technical file from the records",
+   "rule": "The technical documentation is produced from the live records, not written separately",
+   "owner": "Principal investigator",
+   "evidence": [
+    {
+     "type": "test",
+     "ref": "tests/test_governance_modules.py::test_technical_file_lists_every_control"
+    }
+   ],
+   "frameworks": {
+    "eu": [
+     "Art. 11"
+    ],
+    "iso": [
+     "Cl. 7"
+    ],
+    "oecd": [
+     "1.3"
+    ]
+   }
+  },
+  {
+   "id": "G7",
+   "stage": "Governance",
+   "name": "Impact assessment",
+   "rule": "Who is affected, what can go wrong for them, and what reduces it",
+   "owner": "Principal investigator",
+   "evidence": [
+    {
+     "type": "file",
+     "ref": "governance/impact_assessment.md"
+    }
+   ],
+   "frameworks": {
+    "eu": [
+     "Art. 27"
+    ],
+    "nist": [
+     "MAP"
+    ],
+    "iso": [
+     "Cl. 8",
+     "A.5",
+     "ISO 42005"
+    ],
+    "oecd": [
+     "1.1",
+     "1.2"
+    ]
+   }
+  },
+  {
+   "id": "G8",
+   "stage": "Governance",
+   "name": "Internal audit every 3 months",
+   "rule": "A person not involved in the work checks the controls and records the result",
+   "owner": "Supervisor",
+   "evidence": [
+    {
+     "type": "record",
+     "ref": "governance/records/internal_audit_*.md",
+     "max_age_days": 92
+    }
+   ],
+   "frameworks": {
+    "nist": [
+     "GOVERN"
+    ],
+    "iso": [
+     "Cl. 9"
+    ],
+    "oecd": [
+     "1.5"
+    ]
+   }
+  },
+  {
+   "id": "D1",
+   "stage": "Training data",
+   "name": "Archives verified by hash",
+   "rule": "The dataset files match their published hashes before use",
+   "owner": "Principal investigator",
+   "evidence": [
+    {
+     "type": "file",
+     "ref": "../configs/xbd_sha1.txt"
+    },
+    {
+     "type": "file",
+     "ref": "../scripts/verify_xbd.sh"
+    }
+   ],
+   "frameworks": {
+    "eu": [
+     "Art. 10"
+    ],
+    "nist": [
+     "MAP"
+    ],
+    "iso": [
+     "A.7"
+    ],
+    "data": [
+     "DAMA quality"
+    ]
+   }
+  },
+  {
+   "id": "D2",
+   "stage": "Training data",
+   "name": "Licence and terms recorded",
+   "rule": "The dataset licence is written in the datasheet, nothing left to confirm",
+   "owner": "Principal investigator",
+   "evidence": [
+    {
+     "type": "live",
+     "check": "licence_recorded"
+    }
+   ],
+   "frameworks": {
+    "eu": [
+     "Art. 10"
+    ],
+    "iso": [
+     "A.7",
+     "A.10"
+    ],
+    "data": [
+     "DAMA metadata"
+    ],
+    "pk": [
+     "PECA 2016"
+    ]
+   }
+  },
+  {
+   "id": "D3",
+   "stage": "Training data",
+   "name": "Datasheet",
+   "rule": "Composition, collection, uses and limits of the training data",
+   "owner": "Principal investigator",
+   "evidence": [
+    {
+     "type": "file",
+     "ref": "governance/datasheet_xbd.md"
+    }
+   ],
+   "frameworks": {
+    "eu": [
+     "Art. 10",
+     "Art. 11"
+    ],
+    "nist": [
+     "MAP"
+    ],
+    "iso": [
+     "A.7"
+    ],
+    "data": [
+     "DAMA metadata"
+    ]
+   }
+  },
+  {
+   "id": "D4",
+   "stage": "Training data",
+   "name": "No leakage between splits",
+   "rule": "No image pair is in more than one of train, test and hold",
+   "owner": "Principal investigator",
+   "evidence": [
+    {
+     "type": "test",
+     "ref": "tests/test_governance_modules.py::test_no_pair_is_in_two_splits"
+    },
+    {
+     "type": "live",
+     "check": "leakage_free"
+    }
+   ],
+   "frameworks": {
+    "eu": [
+     "Art. 10"
+    ],
+    "nist": [
+     "MEASURE"
+    ],
+    "iso": [
+     "A.7"
+    ],
+    "data": [
+     "DAMA quality"
+    ]
+   }
+  },
+  {
+   "id": "T1",
+   "stage": "Training",
+   "name": "Complete run record",
+   "rule": "The approved model's run records its code version, data-split hash, seed and command",
+   "owner": "Principal investigator",
+   "evidence": [
+    {
+     "type": "live",
+     "check": "approved_run_record"
+    }
+   ],
+   "frameworks": {
+    "eu": [
+     "Art. 11",
+     "Art. 12"
+    ],
+    "nist": [
+     "MEASURE"
+    ],
+    "iso": [
+     "A.6"
+    ],
+    "data": [
+     "DAMA lineage"
+    ]
+   }
+  },
+  {
+   "id": "T2",
+   "stage": "Training",
+   "name": "Model card from the run",
+   "rule": "The approved model has a model card written from its own run records",
+   "owner": "Principal investigator",
+   "evidence": [
+    {
+     "type": "live",
+     "check": "approved_model_card"
+    }
+   ],
+   "frameworks": {
+    "eu": [
+     "Art. 11"
+    ],
+    "nist": [
+     "MAP",
+     "MEASURE"
+    ],
+    "iso": [
+     "A.6",
+     "A.8"
+    ],
+    "oecd": [
+     "1.3"
+    ]
+   }
+  },
+  {
+   "id": "T3",
+   "stage": "Training",
+   "name": "Training cannot exhaust the server",
+   "rule": "Training stops itself, after saving, when free memory runs low",
+   "owner": "Principal investigator",
+   "evidence": [
+    {
+     "type": "file_contains",
+     "ref": "../src/seg_benchmark.py",
+     "text": "min_free_ram_gb"
+    }
+   ],
+   "frameworks": {
+    "eu": [
+     "Art. 15"
+    ],
+    "iso": [
+     "A.4"
+    ],
+    "oecd": [
+     "1.4"
+    ]
+   }
+  },
+  {
+   "id": "T4",
+   "stage": "Training",
+   "name": "Results repeated over three seeds",
+   "rule": "The approved model's result is repeated with three training runs",
+   "owner": "Principal investigator",
+   "evidence": [
+    {
+     "type": "live",
+     "check": "seeds_measured"
+    }
+   ],
+   "frameworks": {
+    "eu": [
+     "Art. 15"
+    ],
+    "nist": [
+     "MEASURE"
+    ],
+    "iso": [
+     "A.6"
+    ],
+    "oecd": [
+     "1.4"
+    ]
+   }
+  },
+  {
+   "id": "V1",
+   "stage": "Evaluation",
+   "name": "Pass marks set before the final runs",
+   "rule": "Acceptance criteria written down before the results they judge",
+   "owner": "Supervisor",
+   "evidence": [
+    {
+     "type": "file",
+     "ref": "governance/acceptance_criteria.json"
+    },
+    {
+     "type": "file",
+     "ref": "governance/acceptance_criteria.md"
+    }
+   ],
+   "frameworks": {
+    "eu": [
+     "Art. 15"
+    ],
+    "nist": [
+     "MEASURE"
+    ],
+    "iso": [
+     "Cl. 8",
+     "A.6"
+    ]
+   }
+  },
+  {
+   "id": "V2",
+   "stage": "Evaluation",
+   "name": "Approved model meets every pass mark",
+   "rule": "The approved model passes every acceptance criterion",
+   "owner": "Supervisor",
+   "evidence": [
+    {
+     "type": "live",
+     "check": "approved_model_gate"
+    }
+   ],
+   "frameworks": {
+    "eu": [
+     "Art. 15"
+    ],
+    "nist": [
+     "MEASURE",
+     "MANAGE"
+    ],
+    "iso": [
+     "A.6"
+    ],
+    "oecd": [
+     "1.4"
+    ]
+   }
+  },
+  {
+   "id": "V3",
+   "stage": "Evaluation",
+   "name": "Score on disasters never seen in training",
+   "rule": "The approved model is scored on whole disasters left out of training",
+   "owner": "Principal investigator",
+   "evidence": [
+    {
+     "type": "live",
+     "check": "unseen_measured"
+    }
+   ],
+   "frameworks": {
+    "eu": [
+     "Art. 15"
+    ],
+    "nist": [
+     "MEASURE"
+    ],
+    "iso": [
+     "A.6"
+    ],
+    "oecd": [
+     "1.2",
+     "1.4"
+    ]
+   }
+  },
+  {
+   "id": "V4",
+   "stage": "Evaluation",
+   "name": "Robustness and calibration measured",
+   "rule": "Misaligned images and confidence are measured for the approved model",
+   "owner": "Principal investigator",
+   "evidence": [
+    {
+     "type": "live",
+     "check": "robustness_measured"
+    }
+   ],
+   "frameworks": {
+    "eu": [
+     "Art. 15"
+    ],
+    "nist": [
+     "MEASURE"
+    ],
+    "iso": [
+     "A.6"
+    ],
+    "oecd": [
+     "1.4"
+    ]
+   }
+  },
+  {
+   "id": "R1",
+   "stage": "Model release",
+   "name": "Release gate",
+   "rule": "A model that misses a pass mark is released only with a written exception the approver sees",
+   "owner": "Administrators",
+   "evidence": [
+    {
+     "type": "test",
+     "ref": "tests/test_governance_modules.py::test_release_gate_blocks_a_model_that_misses_criteria_unless_an_exception_is_given"
+    }
+   ],
+   "frameworks": {
+    "eu": [
+     "Art. 9",
+     "Art. 17"
+    ],
+    "nist": [
+     "MANAGE"
+    ],
+    "iso": [
+     "Cl. 8",
+     "A.6"
+    ]
+   }
+  },
+  {
+   "id": "R2",
+   "stage": "Model release",
+   "name": "Two people for every sensitive change",
+   "rule": "The model, a threshold or a role changes only when a second eligible person approves",
+   "owner": "Administrators",
+   "evidence": [
+    {
+     "type": "test",
+     "ref": "tests/test_approvals.py::test_with_two_administrators_a_model_change_waits_for_the_other"
+    }
+   ],
+   "frameworks": {
+    "eu": [
+     "Art. 17"
+    ],
+    "nist": [
+     "GOVERN",
+     "MANAGE"
+    ],
+    "iso": [
+     "A.3",
+     "A.6"
+    ],
+    "oecd": [
+     "1.5"
+    ]
+   }
+  },
+  {
+   "id": "R3",
+   "stage": "Model release",
+   "name": "Approved file is the evaluated file",
+   "rule": "The approved model's checkpoint on disk matches its recorded hash",
+   "owner": "Administrators",
+   "evidence": [
+    {
+     "type": "live",
+     "check": "approved_model_hash"
+    }
+   ],
+   "frameworks": {
+    "eu": [
+     "Art. 12",
+     "Art. 15"
+    ],
+    "iso": [
+     "A.6"
+    ],
+    "oecd": [
+     "1.4"
+    ]
+   }
+  },
+  {
+   "id": "R4",
+   "stage": "Model release",
+   "name": "Rollback ready",
+   "rule": "The previously approved model is still available to switch back to",
+   "owner": "Administrators",
+   "evidence": [
+    {
+     "type": "live",
+     "check": "previous_model_available"
+    }
+   ],
+   "frameworks": {
+    "eu": [
+     "Art. 9"
+    ],
+    "nist": [
+     "MANAGE"
+    ],
+    "iso": [
+     "A.6"
+    ]
+   }
+  },
+  {
+   "id": "I1",
+   "stage": "Image intake",
+   "name": "Rights to the imagery",
+   "rule": "Source, licence and a confirmation of the right to process are required for every upload",
+   "owner": "Analysts",
+   "evidence": [
+    {
+     "type": "test",
+     "ref": "tests/test_governance_modules.py::test_upload_needs_source_licence_and_rights"
+    },
+    {
+     "type": "live",
+     "check": "uploads_have_rights"
+    }
+   ],
+   "frameworks": {
+    "eu": [
+     "Art. 10"
+    ],
+    "iso": [
+     "A.7",
+     "A.10"
+    ],
+    "data": [
+     "OCHA data responsibility",
+     "DAMA metadata"
+    ],
+    "pk": [
+     "PDP Bill (draft)"
+    ]
+   }
+  },
+  {
+   "id": "I2",
+   "stage": "Image intake",
+   "name": "Input quality and unusual images",
+   "rule": "Each upload's statistics are compared with the training range; blank, cloudy and unusual images are flagged",
+   "owner": "Analysts",
+   "evidence": [
+    {
+     "type": "test",
+     "ref": "tests/test_governance_modules.py::test_unusual_and_blank_images_are_flagged"
+    },
+    {
+     "type": "live",
+     "check": "reference_stats"
+    }
+   ],
+   "frameworks": {
+    "eu": [
+     "Art. 10",
+     "Art. 15"
+    ],
+    "nist": [
+     "MEASURE"
+    ],
+    "iso": [
+     "A.7"
+    ],
+    "data": [
+     "DAMA quality"
+    ],
+    "oecd": [
+     "1.4"
+    ]
+   }
+  },
+  {
+   "id": "I3",
+   "stage": "Image intake",
+   "name": "Camera and device metadata removed",
+   "rule": "EXIF, XMP, IPTC and text metadata are removed from uploaded files; georeference is kept",
+   "owner": "Analysts",
+   "evidence": [
+    {
+     "type": "test",
+     "ref": "tests/test_governance_modules.py::test_metadata_is_stripped_from_jpeg_and_png"
+    }
+   ],
+   "frameworks": {
+    "oecd": [
+     "1.2"
+    ],
+    "data": [
+     "OCHA data responsibility"
+    ],
+    "pk": [
+     "PDP Bill (draft)"
+    ]
+   }
+  },
+  {
+   "id": "I4",
+   "stage": "Image intake",
+   "name": "A person confirms the alignment",
+   "rule": "The assessment waits until a person has checked that the before and after images line up",
+   "owner": "Analysts",
+   "evidence": [
+    {
+     "type": "test",
+     "ref": "tests/test_uploads.py::test_alignment_is_checked_before_the_assessment"
+    }
+   ],
+   "frameworks": {
+    "eu": [
+     "Art. 14"
+    ],
+    "nist": [
+     "MANAGE"
+    ],
+    "iso": [
+     "A.9"
+    ]
+   }
+  },
+  {
+   "id": "I5",
+   "stage": "Image intake",
+   "name": "Retention period",
+   "rule": "Uploaded imagery is deleted after a set period",
+   "owner": "Administrators",
+   "evidence": [
+    {
+     "type": "live",
+     "check": "retention_set"
+    },
+    {
+     "type": "test",
+     "ref": "tests/test_governance.py::test_retention_rule_deletes_only_expired_uploads"
+    }
+   ],
+   "frameworks": {
+    "data": [
+     "DAMA retention",
+     "OCHA data responsibility"
+    ],
+    "pk": [
+     "PDP Bill (draft)"
+    ]
+   }
+  },
+  {
+   "id": "P1",
+   "stage": "Prediction",
+   "name": "Abstain instead of guess",
+   "rule": "When an input check fails or most structures are unsure, no alert is raised and the area is shown as not assessed",
+   "owner": "Analysts",
+   "evidence": [
+    {
+     "type": "test",
+     "ref": "tests/test_governance_modules.py::test_assessment_abstains_when_a_check_fails_or_most_structures_are_unsure"
+    }
+   ],
+   "frameworks": {
+    "eu": [
+     "Art. 14",
+     "Art. 15"
+    ],
+    "nist": [
+     "MANAGE"
+    ],
+    "iso": [
+     "A.9"
+    ],
+    "oecd": [
+     "1.4"
+    ]
+   }
+  },
+  {
+   "id": "P2",
+   "stage": "Prediction",
+   "name": "Unsure structures marked for review",
+   "rule": "Structures below the review confidence are drawn dashed and counted",
+   "owner": "Analysts",
+   "evidence": [
+    {
+     "type": "test",
+     "ref": "tests/test_governance.py::test_gates_flag_what_the_analyst_must_know"
+    }
+   ],
+   "frameworks": {
+    "eu": [
+     "Art. 13",
+     "Art. 14"
+    ],
+    "nist": [
+     "MANAGE"
+    ],
+    "iso": [
+     "A.8"
+    ],
+    "oecd": [
+     "1.3"
+    ]
+   }
+  },
+  {
+   "id": "P3",
+   "stage": "Prediction",
+   "name": "Provenance on every result",
+   "rule": "Input, model and code hashes and the thresholds used are stored with each result",
+   "owner": "Analysts",
+   "evidence": [
+    {
+     "type": "test",
+     "ref": "tests/test_governance.py::test_provenance_hashes_inputs_and_checkpoint"
+    }
+   ],
+   "frameworks": {
+    "eu": [
+     "Art. 12"
+    ],
+    "nist": [
+     "MEASURE"
+    ],
+    "iso": [
+     "A.6"
+    ],
+    "data": [
+     "DAMA lineage"
+    ],
+    "oecd": [
+     "1.5"
+    ]
+   }
+  },
+  {
+   "id": "P4",
+   "stage": "Prediction",
+   "name": "Only the approved model by default",
+   "rule": "The default model is the approved one, never the best test score",
+   "owner": "Administrators",
+   "evidence": [
+    {
+     "type": "test",
+     "ref": "tests/test_governance.py::test_default_model_is_the_approved_one"
+    }
+   ],
+   "frameworks": {
+    "eu": [
+     "Art. 17"
+    ],
+    "nist": [
+     "MANAGE"
+    ],
+    "iso": [
+     "A.6"
+    ]
+   }
+  },
+  {
+   "id": "A1",
+   "stage": "Area alerts",
+   "name": "Drafts only",
+   "rule": "Every alert starts as a draft; nothing is sent anywhere automatically",
+   "owner": "Officers",
+   "evidence": [
+    {
+     "type": "test",
+     "ref": "tests/test_features.py::test_review_lifecycle_and_export"
+    }
+   ],
+   "frameworks": {
+    "eu": [
+     "Art. 14"
+    ],
+    "nist": [
+     "MANAGE"
+    ],
+    "iso": [
+     "A.9"
+    ],
+    "oecd": [
+     "1.5"
+    ]
+   }
+  },
+  {
+   "id": "A2",
+   "stage": "Area alerts",
+   "name": "Versioned alert rule",
+   "rule": "The alert rule's values are thresholds: changed only by two people, never edited, each version kept",
+   "owner": "Administrators",
+   "evidence": [
+    {
+     "type": "test",
+     "ref": "tests/test_governance_modules.py::test_alert_rule_comes_from_versioned_thresholds"
+    },
+    {
+     "type": "test",
+     "ref": "tests/test_governance_modules.py::test_thresholds_cannot_be_edited_only_added"
+    },
+    {
+     "type": "live",
+     "check": "thresholds_versioned"
+    }
+   ],
+   "frameworks": {
+    "eu": [
+     "Art. 12",
+     "Art. 17"
+    ],
+    "nist": [
+     "MANAGE"
+    ],
+    "iso": [
+     "A.6"
+    ]
+   }
+  },
+  {
+   "id": "A3",
+   "stage": "Area alerts",
+   "name": "Alerts trace to their inputs",
+   "rule": "Each exported alert carries its rule version, input and model hashes",
+   "owner": "Officers",
+   "evidence": [
+    {
+     "type": "test",
+     "ref": "tests/test_governance.py::test_exported_alert_traces_to_its_inputs_and_checkpoint"
+    }
+   ],
+   "frameworks": {
+    "eu": [
+     "Art. 12",
+     "Art. 13"
+    ],
+    "iso": [
+     "A.8"
+    ],
+    "data": [
+     "DAMA lineage"
+    ],
+    "oecd": [
+     "1.3"
+    ]
+   }
+  },
+  {
+   "id": "H1",
+   "stage": "Human review",
+   "name": "Four-eyes confirmation",
+   "rule": "The person who confirms an alert is not the person who proposed it (held by the database)",
+   "owner": "Officers",
+   "evidence": [
+    {
+     "type": "test",
+     "ref": "tests/test_database.py::test_the_database_refuses_a_confirmation_by_the_person_who_proposed"
+    }
+   ],
+   "frameworks": {
+    "eu": [
+     "Art. 14"
+    ],
+    "nist": [
+     "MANAGE"
+    ],
+    "iso": [
+     "A.9"
+    ],
+    "oecd": [
+     "1.5"
+    ]
+   }
+  },
+  {
+   "id": "H2",
+   "stage": "Human review",
+   "name": "Reasons and history",
+   "rule": "A reason is required to dismiss or retract; the review history cannot be edited",
+   "owner": "Officers",
+   "evidence": [
+    {
+     "type": "test",
+     "ref": "tests/test_governance.py::test_review_needs_name_and_reason_and_keeps_history"
+    }
+   ],
+   "frameworks": {
+    "eu": [
+     "Art. 12",
+     "Art. 14"
+    ],
+    "iso": [
+     "A.9"
+    ],
+    "oecd": [
+     "1.5"
+    ]
+   }
+  },
+  {
+   "id": "H3",
+   "stage": "Human review",
+   "name": "Rubber-stamp measure",
+   "rule": "Confirmations made in under 5 seconds or without opening the evidence are counted",
+   "owner": "Officers",
+   "evidence": [
+    {
+     "type": "test",
+     "ref": "tests/test_governance_modules.py::test_review_behaviour_counts_quick_confirmations"
+    }
+   ],
+   "frameworks": {
+    "eu": [
+     "Art. 14"
+    ],
+    "nist": [
+     "MEASURE"
+    ],
+    "iso": [
+     "A.9"
+    ]
+   }
+  },
+  {
+   "id": "H4",
+   "stage": "Human review",
+   "name": "Oversight test every 3 months",
+   "rule": "Reviewers are tested with planted false alerts; they must catch at least 80%",
+   "owner": "Supervisor",
+   "evidence": [
+    {
+     "type": "record",
+     "ref": "governance/records/oversight_test_*.md",
+     "max_age_days": 92
+    }
+   ],
+   "frameworks": {
+    "eu": [
+     "Art. 14"
+    ],
+    "nist": [
+     "MEASURE"
+    ],
+    "iso": [
+     "Cl. 9",
+     "A.9"
+    ]
+   }
+  },
+  {
+   "id": "E1",
+   "stage": "Export",
+   "name": "Export right, every export logged",
+   "rule": "Alert files and reports need the export right; each download is an audit row",
+   "owner": "Officers",
+   "evidence": [
+    {
+     "type": "test",
+     "ref": "tests/test_governance_modules.py::test_reports_need_export_and_are_logged"
+    }
+   ],
+   "frameworks": {
+    "eu": [
+     "Art. 12"
+    ],
+    "iso": [
+     "A.8"
+    ],
+    "data": [
+     "OCHA data responsibility"
+    ],
+    "pk": [
+     "PECA 2016"
+    ]
+   }
+  },
+  {
+   "id": "E2",
+   "stage": "Export",
+   "name": "Labelled exports",
+   "rule": "Draft marker, model version and limits on every export and report",
+   "owner": "Officers",
+   "evidence": [
+    {
+     "type": "test",
+     "ref": "tests/test_features.py::test_report_follows_the_review"
+    }
+   ],
+   "frameworks": {
+    "eu": [
+     "Art. 13"
+    ],
+    "iso": [
+     "A.8"
+    ],
+    "oecd": [
+     "1.3"
+    ]
+   }
+  },
+  {
+   "id": "E3",
+   "stage": "Export",
+   "name": "Own unit only",
+   "rule": "People see and export only their own unit's work and the units below it",
+   "owner": "Administrators",
+   "evidence": [
+    {
+     "type": "test",
+     "ref": "tests/test_access.py::test_uploads_are_visible_only_inside_the_owner_unit_tree"
+    }
+   ],
+   "frameworks": {
+    "data": [
+     "OCHA data responsibility",
+     "DAMA security"
+    ],
+    "pk": [
+     "PECA 2016"
+    ]
+   }
+  },
+  {
+   "id": "M1",
+   "stage": "Monitoring",
+   "name": "Live accuracy above the floor",
+   "rule": "The share of recent reviewed alerts people confirmed stays above the floor",
+   "owner": "Administrators",
+   "evidence": [
+    {
+     "type": "live",
+     "check": "live_precision_ok"
+    },
+    {
+     "type": "test",
+     "ref": "tests/test_governance_modules.py::test_live_precision_below_floor_raises_one_incident"
+    }
+   ],
+   "frameworks": {
+    "eu": [
+     "Art. 72"
+    ],
+    "nist": [
+     "MEASURE",
+     "MANAGE"
+    ],
+    "iso": [
+     "Cl. 9"
+    ],
+    "oecd": [
+     "1.4"
+    ]
+   }
+  },
+  {
+   "id": "M2",
+   "stage": "Monitoring",
+   "name": "Drift in the uploads",
+   "rule": "The share of unusual uploads is watched month by month",
+   "owner": "Administrators",
+   "evidence": [
+    {
+     "type": "live",
+     "check": "drift_ok"
+    },
+    {
+     "type": "test",
+     "ref": "tests/test_governance_modules.py::test_drift_raises_an_incident"
+    }
+   ],
+   "frameworks": {
+    "eu": [
+     "Art. 72"
+    ],
+    "nist": [
+     "MEASURE"
+    ],
+    "iso": [
+     "Cl. 9"
+    ],
+    "data": [
+     "DAMA quality"
+    ]
+   }
+  },
+  {
+   "id": "N1",
+   "stage": "Incidents",
+   "name": "Incident register",
+   "rule": "Incidents are opened, assessed and closed with a cause; nothing is deleted",
+   "owner": "Administrators",
+   "evidence": [
+    {
+     "type": "test",
+     "ref": "tests/test_governance_modules.py::test_incidents_open_assess_close_and_cannot_be_deleted"
+    }
+   ],
+   "frameworks": {
+    "eu": [
+     "Art. 73"
+    ],
+    "nist": [
+     "MANAGE"
+    ],
+    "iso": [
+     "Cl. 10"
+    ],
+    "oecd": [
+     "1.5"
+    ]
+   }
+  },
+  {
+   "id": "N2",
+   "stage": "Incidents",
+   "name": "A retraction opens an incident",
+   "rule": "Retracting a confirmed alert opens an incident automatically",
+   "owner": "Officers",
+   "evidence": [
+    {
+     "type": "test",
+     "ref": "tests/test_governance_modules.py::test_retraction_raises_an_incident"
+    }
+   ],
+   "frameworks": {
+    "eu": [
+     "Art. 73"
+    ],
+    "nist": [
+     "MANAGE"
+    ],
+    "iso": [
+     "Cl. 10"
+    ]
+   }
+  },
+  {
+   "id": "N3",
+   "stage": "Incidents",
+   "name": "Urgent incidents handled within 7 days",
+   "rule": "No high or serious incident stays open more than 7 days",
+   "owner": "Administrators",
+   "evidence": [
+    {
+     "type": "live",
+     "check": "incidents_handled"
+    }
+   ],
+   "frameworks": {
+    "eu": [
+     "Art. 73"
+    ],
+    "nist": [
+     "MANAGE"
+    ],
+    "iso": [
+     "Cl. 10"
+    ]
+   }
+  },
+  {
+   "id": "N4",
+   "stage": "Incidents",
+   "name": "Incident drill every 6 months",
+   "rule": "A rehearsed wrong-alert incident, from retraction to closure, with its time recorded",
+   "owner": "Supervisor",
+   "evidence": [
+    {
+     "type": "record",
+     "ref": "governance/records/incident_drill_*.md",
+     "max_age_days": 183
+    }
+   ],
+   "frameworks": {
+    "eu": [
+     "Art. 73"
+    ],
+    "nist": [
+     "MANAGE"
+    ],
+    "iso": [
+     "Cl. 10"
+    ]
+   }
+  },
+  {
+   "id": "F1",
+   "stage": "Every stage",
+   "name": "Individual accounts",
+   "rule": "Personal accounts, hashed passwords, lock-out after failed attempts",
+   "owner": "Administrators",
+   "evidence": [
+    {
+     "type": "test",
+     "ref": "tests/test_access.py::test_login_logout_lockout_and_password_rules"
+    }
+   ],
+   "frameworks": {
+    "eu": [
+     "Art. 15"
+    ],
+    "nist": [
+     "GOVERN"
+    ],
+    "iso": [
+     "A.4"
+    ],
+    "data": [
+     "DAMA security"
+    ],
+    "pk": [
+     "PECA 2016"
+    ]
+   }
+  },
+  {
+   "id": "F2",
+   "stage": "Every stage",
+   "name": "Separation of duties",
+   "rule": "No role combines account management or audit with handling imagery or alerts (held by the database)",
+   "owner": "Administrators",
+   "evidence": [
+    {
+     "type": "test",
+     "ref": "tests/test_database.py::test_a_role_cannot_combine_permissions_that_must_stay_apart"
+    }
+   ],
+   "frameworks": {
+    "nist": [
+     "GOVERN"
+    ],
+    "iso": [
+     "A.3"
+    ],
+    "oecd": [
+     "1.5"
+    ]
+   }
+  },
+  {
+   "id": "F3",
+   "stage": "Every stage",
+   "name": "Tamper-evident audit log",
+   "rule": "Every action is a chained, append-only row; the chain verifies",
+   "owner": "Administrators",
+   "evidence": [
+    {
+     "type": "test",
+     "ref": "tests/test_governance.py::test_the_database_itself_refuses_to_change_or_break_the_audit_chain"
+    },
+    {
+     "type": "live",
+     "check": "audit_chain"
+    }
+   ],
+   "frameworks": {
+    "eu": [
+     "Art. 12"
+    ],
+    "nist": [
+     "GOVERN"
+    ],
+    "iso": [
+     "Cl. 7"
+    ],
+    "oecd": [
+     "1.5"
+    ],
+    "pk": [
+     "PECA 2016"
+    ]
+   }
+  },
+  {
+   "id": "F4",
+   "stage": "Every stage",
+   "name": "Deny by default",
+   "rule": "Every route has an access rule; anything without one is refused",
+   "owner": "Administrators",
+   "evidence": [
+    {
+     "type": "test",
+     "ref": "tests/test_access.py::test_sign_in_is_required_and_every_route_has_a_rule"
+    }
+   ],
+   "frameworks": {
+    "eu": [
+     "Art. 15"
+    ],
+    "iso": [
+     "A.4"
+    ],
+    "data": [
+     "DAMA security"
+    ],
+    "pk": [
+     "PECA 2016"
+    ]
+   }
+  },
+  {
+   "id": "F5",
+   "stage": "Every stage",
+   "name": "Access reviewed every 3 months",
+   "rule": "An administrator confirms that each active account is still needed",
+   "owner": "Administrators",
+   "evidence": [
+    {
+     "type": "live",
+     "check": "access_review_current"
+    },
+    {
+     "type": "test",
+     "ref": "tests/test_governance_modules.py::test_access_review_cannot_review_yourself_and_disable_ends_access"
+    }
+   ],
+   "frameworks": {
+    "nist": [
+     "GOVERN"
+    ],
+    "iso": [
+     "A.3"
+    ],
+    "data": [
+     "DAMA security"
+    ],
+    "pk": [
+     "PECA 2016"
+    ]
+   }
+  },
+  {
+   "id": "F6",
+   "stage": "Every stage",
+   "name": "Two-step sign-in",
+   "rule": "Administrators and approving officers sign in with a password and a code from an authenticator app",
+   "owner": "Administrators",
+   "evidence": [
+    {
+     "type": "live",
+     "check": "two_step_coverage"
+    },
+    {
+     "type": "test",
+     "ref": "tests/test_governance_modules.py::test_two_step_sign_in"
+    }
+   ],
+   "frameworks": {
+    "eu": [
+     "Art. 15"
+    ],
+    "iso": [
+     "A.4"
+    ],
+    "data": [
+     "DAMA security"
+    ],
+    "pk": [
+     "PECA 2016"
+    ]
+   }
+  },
+  {
+   "id": "F7",
+   "stage": "Every stage",
+   "name": "No shared demo accounts in real use",
+   "rule": "The demo accounts with the published password are switched off",
+   "owner": "Administrators",
+   "evidence": [
+    {
+     "type": "live",
+     "check": "demo_accounts_off"
+    }
+   ],
+   "frameworks": {
+    "eu": [
+     "Art. 15"
+    ],
+    "nist": [
+     "GOVERN"
+    ],
+    "oecd": [
+     "1.5"
+    ],
+    "pk": [
+     "PECA 2016"
+    ]
+   }
+  }
+ ]
+}

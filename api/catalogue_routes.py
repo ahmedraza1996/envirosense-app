@@ -54,7 +54,7 @@ def put_threshold(key: str, body: ThresholdChange):
     """Change a threshold that alters what the application flags. Kept with who, when and why; recorded in the audit log."""
     if len(body.reason.strip()) < 10:
         raise HTTPException(400, "give the reason (at least 10 characters)")
-    if key not in semantic.DEFAULTS:
+    if key not in semantic.LIMITS:
         raise HTTPException(400, f"unknown threshold {key}")
     res = accounts.submit_request("threshold_change", key, {"value": body.value, "reason": body.reason.strip()})
     if res["status"] == "pending":

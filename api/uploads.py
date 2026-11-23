@@ -28,7 +28,7 @@ import numpy as np
 from rasterio.transform import Affine
 
 from ..db.engine import one, rows, run, tx
-from . import geoimage, imagery, registration, service
+from . import geoimage, imagery, input_quality, registration, service
 from .archive import xbd_archive
 from .engines import ROOT
 
@@ -70,7 +70,8 @@ def read_json(path: Path, default=None):
 # ---- records in the database ----------------------------------------------------------------------------------
 
 _SELECT = (f"SELECT u.id, u.unit_id, u.created_by, u.name, u.disaster_type, to_char(u.event_date, 'YYYY-MM-DD') AS event_date, u.model_id, u.after_file, "
-           f"u.before_file, u.after_bounds, u.before_bounds, u.meta, to_char(u.created_at AT TIME ZONE 'UTC', '{_STAMP}') AS created_utc, "
+           f"u.before_file, u.after_bounds, u.before_bounds, u.meta, u.source, u.licence, u.rights_confirmed_by, u.input_quality, "
+           f"to_char(u.created_at AT TIME ZONE 'UTC', '{_STAMP}') AS created_utc, "
            f"j.id AS job_id, j.state, j.step, j.error, j.error_detail, j.result, j.attempts, "
            f"to_char(COALESCE(j.finished_at, j.heartbeat_at, j.created_at) AT TIME ZONE 'UTC', '{_STAMP}') AS updated_utc "
            f"FROM ingest.uploads u LEFT JOIN LATERAL (SELECT * FROM ingest.jobs WHERE upload_id = u.id ORDER BY id DESC LIMIT 1) j ON true")
@@ -86,7 +87,8 @@ def _shape(r: dict) -> dict:
     meta = {k: v for k, v in (r["meta"] or {}).items()}
     return {**meta, "id": r["id"], "name": r["name"], "disaster_type": r["disaster_type"], "event_date": r["event_date"], "model_id": r["model_id"],
             "after_bounds": r["after_bounds"], "before_bounds": r["before_bounds"], "after_file": r["after_file"], "before_file": r["before_file"],
-            "created_utc": r["created_utc"], "created_by": r["created_by"], "unit": r["unit_id"], "status": st}
+            "created_utc": r["created_utc"], "created_by": r["created_by"], "unit": r["unit_id"], "source": r["source"], "licence": r["licence"],
+            "rights_confirmed_by": r["rights_confirmed_by"], "input_quality": r["input_quality"] or {}, "status": st}
 
 
 def get_meta(uid: str) -> dict:
@@ -143,13 +145,17 @@ def purge_expired() -> list:
 
 def register(uid: str, meta: dict, unit: str, by: str, queue: bool = True) -> None:
     """Insert the upload's row (details, owner unit) and, unless `queue` is False, its job."""
-    keep = {k: v for k, v in meta.items() if k not in ("id", "name", "disaster_type", "event_date", "model_id", "after_file", "before_file",
-                                                          "after_bounds", "before_bounds", "created_utc")}
+    cols = ("id", "name", "disaster_type", "event_date", "model_id", "after_file", "before_file", "after_bounds", "before_bounds", "created_utc",
+            "source", "licence", "rights_confirmed_by", "input_quality")
+    keep = {k: v for k, v in meta.items() if k not in cols}
     with tx() as c:
-        run(c, "INSERT INTO ingest.uploads (id, unit_id, created_by, name, disaster_type, event_date, model_id, after_file, before_file, after_bounds, before_bounds, meta, created_at) "
-               "VALUES (:i, :u, :b, :n, :t, CAST(:d AS date), :m, :af, :bf, CAST(:ab AS jsonb), CAST(:bb AS jsonb), CAST(:meta AS jsonb), COALESCE(CAST(:at AS timestamptz), now()))",
+        run(c, "INSERT INTO ingest.uploads (id, unit_id, created_by, name, disaster_type, event_date, model_id, after_file, before_file, after_bounds, before_bounds, meta, "
+               "source, licence, rights_confirmed_by, created_at) "
+               "VALUES (:i, :u, :b, :n, :t, CAST(:d AS date), :m, :af, :bf, CAST(:ab AS jsonb), CAST(:bb AS jsonb), CAST(:meta AS jsonb), :src, :lic, :rc, "
+               "COALESCE(CAST(:at AS timestamptz), now()))",
             i=uid, u=unit, b=by, n=meta["name"], t=meta["disaster_type"], d=meta.get("event_date"), m=meta.get("model_id"), af=meta["after_file"], bf=meta.get("before_file"),
-            ab=json.dumps(meta.get("after_bounds")), bb=json.dumps(meta.get("before_bounds")), meta=json.dumps(keep), at=meta.get("created_utc"))
+            ab=json.dumps(meta.get("after_bounds")), bb=json.dumps(meta.get("before_bounds")), meta=json.dumps(keep), at=meta.get("created_utc"),
+            src=meta.get("source"), lic=meta.get("licence"), rc=meta.get("rights_confirmed_by"))
         if queue:
             run(c, "INSERT INTO ingest.jobs (upload_id, step, created_by) VALUES (:i, 'Waiting for the previous job', :b)", i=uid, b=by)
 
@@ -463,10 +469,19 @@ def _colour_difference(pre, post, valid) -> float | None:
     return float(np.linalg.norm(a.mean(0) - b.mean(0)) + 0.5 * np.linalg.norm(a.std(0) - b.std(0)))
 
 
-def _checks(meta, px_input, after, source, qa, pre, post, valid) -> list:
-    """Input checks shown before the assessment runs: each {name, level ok|warn|fail, text}."""
+def _checks(meta, px_input, after, source, qa, pre, post, valid, quality=None) -> list:
+    """Input checks shown before the assessment runs: each {name, level ok|warn|fail, text}. A check at "fail" makes the assessment abstain."""
     out = []
     add = lambda n, lv, t: out.append({"name": n, "level": lv, "text": t})
+    if meta.get("source") or meta.get("licence"):
+        add("Rights", "ok", f"Source: {meta.get('source') or 'not given'}; licence: {meta.get('licence') or 'not given'}; "
+                            f"right to process confirmed by {meta.get('rights_confirmed_by') or 'nobody'}.")
+    else:
+        add("Rights", "warn", "No source or licence recorded (uploaded before this was required).")
+    priv = meta.get("privacy") or {}
+    if priv:
+        add("Privacy", "ok", ("Removed from the files: " + ", ".join(priv["removed"]) + "." if priv.get("removed") else
+                              "No camera or device metadata found.") + (f" {priv['kept']}." if priv.get("kept") else ""))
     add("Location", "ok", "Placed by its GeoTIFF georeference." if not meta.get("after_bounds") else "Placed by the corner coordinates given (north-up).")
     pxm = imagery.pixel_size_m(after)
     h, w = after.shape
@@ -496,7 +511,20 @@ def _checks(meta, px_input, after, source, qa, pre, post, valid) -> list:
         add("Colour", "ok" if diff < COLOUR_DIFF_WARN else "warn",
             "Similar colour in both images." if diff < COLOUR_DIFF_WARN else
             "The two images differ strongly in colour (season, light or sensor); the model is less reliable on such pairs.")
+    if quality:
+        out += input_quality.describe(quality, *_quality_limits())
     return out
+
+
+def _quality_limits() -> tuple[float, float]:
+    from ..db import semantic
+    return semantic.threshold("unusual_max_outside"), semantic.threshold("blank_max_share")
+
+
+def abstain_reasons(al: dict) -> list:
+    """Checks at "fail" that stop the assessment: the system declines rather than guesses. [{code, message}]"""
+    codes = {"Resolution": "COARSE_IMAGERY", "Capture order": "BEFORE_AFTER_EVENT", "Blank or cloud": "BLANK_OR_CLOUD", "Unusual image": "UNUSUAL_IMAGE"}
+    return [{"code": codes[c["name"]], "message": c["text"]} for c in al.get("checks", []) if c["level"] == "fail" and c["name"] in codes]
 
 
 def prepare(uid: str) -> dict:
@@ -534,9 +562,12 @@ def prepare(uid: str) -> dict:
     has_before = qa["coverage"] > 0.25
     review = bool(meta.get("review_alignment")) and has_before
     h, w = post.shape[:2]
+    quality = input_quality.assess(post, post_valid, *_quality_limits())
+    with tx() as c:
+        run(c, "UPDATE ingest.uploads SET input_quality = CAST(:q AS jsonb) WHERE id = :i", q=json.dumps(quality), i=uid)
     al = {"state": "review" if review else "confirmed", "choice": "auto" if has_before else "after_only", "version": 1,
           "source": source, "auto": qa, "auto_notes": auto_notes, "quality": _quality(qa), "manual": None, "notes": notes,
-          "checks": _checks(meta, px_input, after, source, qa, pre_a, post, valid_a), "pixel_size_m": pxm,
+          "checks": _checks(meta, px_input, after, source, qa, pre_a, post, valid_a, quality), "pixel_size_m": pxm,
           "preview": {"scale": k, "width": round(w * k), "height": round(h * k)}, "confirmed_by": None if review else "automatic", "confirmed_utc": None}
     return _write_alignment(uid, al)
 
@@ -718,7 +749,7 @@ def assess(uid: str, al: dict) -> dict:
                   "post_date": meta.get("event_date") or "not given",
                   "before": {**source, **qa}, "notes": notes}
     return service.area_record(uid, scene_info, eng_id(eng, model_id, post_id), eng, loc, dmg, dmg_p, to_lonlat,
-                               scene_info["pixel_size_m"], extra={"inference_mode": mode})
+                               scene_info["pixel_size_m"], extra={"inference_mode": mode}, abstain=abstain_reasons(al))
 
 
 def eng_id(eng, model_id, post_id):

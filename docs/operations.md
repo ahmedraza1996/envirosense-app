@@ -90,3 +90,15 @@ then fails with a message. A pipeline error (bad image, no coverage) fails the j
 `GET /api/semantic/{classes,metrics,glossary,models,thresholds}` serve the governed definitions. The review confidence threshold is read from `sem.thresholds` (cached for 30 s);
 an administrator changes it with `PUT /api/admin/thresholds/review_confidence` (value and reason), which keeps the old value in the history and writes the audit log. The approved
 default model is the one `sem.model_versions` row with status `approved` (the database allows only one).
+
+## Governance operations (migration 0007)
+- **Every quarter:** run the test suite (it records each test's result for the Compliance page), open Compliance and click **Run checks**, download
+  the technical file, carry out the internal audit and the oversight test, and file their records in `governance/records/` (`README.md` there).
+  Every six months: the incident drill. Review every account on **Access review**.
+- **Reference ranges of the unusual-image check:** re-measure after a new training set with `uv run --no-sync python -m app.scripts.reference_image_stats`.
+- **Control matrix document:** regenerate after editing `governance/controls.json` with `python app/scripts/control_matrix.py`.
+- **Two-step sign-in:** each person switches it on from the account menu. If someone loses their phone, an administrator resets their password
+  (Users page): the reset also switches two-step off, so the person signs in with the temporary password, chooses a new one and sets two-step up
+  again. The audit row of the reset says that two-step was cleared.
+- **Thresholds** are append-only: a value is changed only through an approval request (Thresholds page). The test suite's owner-only clean-up is the
+  only place the trigger is switched off.

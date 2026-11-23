@@ -96,7 +96,7 @@ _current: contextvars.ContextVar = contextvars.ContextVar("current_user", defaul
 _STAMP = "YYYY-MM-DD HH24:MI:SS"
 _USER_COLS = (f"u.username, u.full_name AS name, u.role, u.unit_id AS unit, u.pw_hash AS pw, u.active, u.must_change, "
               f"to_char(u.created_at AT TIME ZONE 'UTC', '{_STAMP}') AS created_utc, u.created_by, "
-              f"to_char(u.last_login_at AT TIME ZONE 'UTC', '{_STAMP}') AS last_login_utc")
+              f"to_char(u.last_login_at AT TIME ZONE 'UTC', '{_STAMP}') AS last_login_utc, u.totp_secret, (u.totp_enabled_at IS NOT NULL) AS two_step")
 _USER_SQL = f"SELECT {_USER_COLS} FROM iam.users u"
 
 
@@ -202,7 +202,8 @@ def public_user(name: str, rec: dict, _units: dict | None = None) -> dict:
     return {"username": name, "name": rec["name"], "role": rec["role"], "role_label": role_defs()[rec["role"]]["label"], "unit": rec["unit"],
             "unit_name": u.get(rec["unit"], {}).get("name", ""), "unit_path": path_names(rec["unit"], u), "active": rec.get("active", True),
             "must_change_password": rec.get("must_change", False), "created_utc": rec.get("created_utc"),
-            "last_login_utc": rec.get("last_login_utc"), "permissions": sorted(perms_of(rec["role"]))}
+            "last_login_utc": rec.get("last_login_utc"), "permissions": sorted(perms_of(rec["role"])),
+            "two_step": bool(rec.get("two_step")), "two_step_expected": bool(perms_of(rec["role"]) & TWO_STEP_FOR)}
 
 
 def list_users(in_units: set | None = None) -> list:
@@ -451,7 +452,67 @@ def purge_sessions() -> None:
         run(c, "DELETE FROM iam.sessions WHERE expires_at < now() - interval '7 days' OR revoked_at < now() - interval '7 days'")
 
 
-def login(username: str, password: str, client: str | None = None) -> tuple[dict, str]:
+# ---- two-step sign-in (TOTP, RFC 6238: a 6-digit code from an authenticator app, new every 30 s) ------------------------------------------
+
+TWO_STEP_FOR = {"users", "model_approve", "approve", "export"}    # holders of these should use it (compliance control F6)
+
+
+class TwoStepNeeded(AuthError):
+    pass
+
+
+def totp_code(secret: str, t: float | None = None, step: int = 0) -> str:
+    import base64
+    import hashlib
+    import hmac
+    import struct
+    import time
+    key = base64.b32decode(secret.upper() + "=" * (-len(secret) % 8))
+    counter = int((time.time() if t is None else t) // 30) + step
+    h = hmac.new(key, struct.pack(">Q", counter), hashlib.sha1).digest()
+    o = h[-1] & 0x0F
+    return f"{(struct.unpack('>I', h[o:o + 4])[0] & 0x7FFFFFFF) % 1_000_000:06d}"
+
+
+def totp_ok(secret: str, code: str, t: float | None = None) -> bool:
+    import hmac
+    code = (code or "").strip().replace(" ", "")
+    return len(code) == 6 and any(hmac.compare_digest(totp_code(secret, t, s), code) for s in (-1, 0, 1))
+
+
+def two_step_setup(username: str) -> dict:
+    """A new secret, not yet required: the user adds it to an authenticator app and proves it with a code (two_step_enable)."""
+    import base64
+    import secrets
+    secret = base64.b32encode(secrets.token_bytes(20)).decode().rstrip("=")
+    with tx() as c:
+        run(c, "UPDATE iam.users SET totp_secret = :s, totp_enabled_at = NULL WHERE username = :u", s=secret, u=username)
+    return {"secret": secret, "uri": f"otpauth://totp/EnviroSense:{username}?secret={secret}&issuer=EnviroSense&digits=6&period=30"}
+
+
+def two_step_enable(username: str, code: str) -> None:
+    rec = get_user(username)
+    if not rec or not rec.get("totp_secret"):
+        raise AuthError("start the set-up first")
+    if not totp_ok(rec["totp_secret"], code):
+        raise AuthError("that code is not right; check the time on your phone and try the next code")
+    with tx() as c:
+        run(c, "UPDATE iam.users SET totp_enabled_at = now() WHERE username = :u", u=username)
+
+
+def two_step_clear(username: str) -> None:
+    with tx() as c:
+        run(c, "UPDATE iam.users SET totp_secret = NULL, totp_enabled_at = NULL WHERE username = :u", u=username)
+
+
+def two_step_disable(username: str, password: str) -> None:
+    rec = get_user(username)
+    if not rec or not check_password(password or "", rec["pw"]):
+        raise AuthError("wrong password")
+    two_step_clear(username)
+
+
+def login(username: str, password: str, client: str | None = None, code: str | None = None) -> tuple[dict, str]:
     username = (username or "").strip().lower()
     with tx() as c:
         st = one(c, "SELECT failed_attempts, locked_until, extract(epoch FROM locked_until - now()) AS wait FROM iam.login_throttle WHERE username = :u", u=username)
@@ -461,6 +522,10 @@ def login(username: str, password: str, client: str | None = None) -> tuple[dict
     ok = bool(rec) and rec["active"] and check_password(password or "", rec["pw"])
     if not rec:
         hash_password("x")  # same cost whether or not the user exists
+    if ok and rec.get("two_step"):
+        if not (code or "").strip():
+            raise TwoStepNeeded("enter the 6-digit code from your authenticator app")     # the password was right: not counted as a failure
+        ok = totp_ok(rec["totp_secret"], code)
     with tx() as c:
         if not ok:
             run(c, "INSERT INTO iam.login_throttle (username, failed_attempts) VALUES (:u, 1) "
@@ -471,7 +536,7 @@ def login(username: str, password: str, client: str | None = None) -> tuple[dict
             run(c, "DELETE FROM iam.login_throttle WHERE username = :u", u=username)
             run(c, "UPDATE iam.users SET last_login_at = now() WHERE username = :u", u=username)
     if not ok:
-        raise AuthError("wrong username or password")
+        raise AuthError("wrong username or password" if not (rec and rec.get("two_step") and code) else "wrong username, password or code")
     return public_user(username, get_user(username)), make_token(username, client)
 
 

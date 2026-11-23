@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "written_utc": "2026-11-03",
+  "source": "governance/acceptance_criteria.md (the text, the reasons and how a result is judged); this file is the same pass marks in a form the release gate reads",
+  "approved_by": null,
+  "criteria": [
+    {"id": "AC-1a", "group": "Accuracy", "text": "Hold score, mean of three training runs (seeds)", "metric": "seeds.hold_mean", "op": ">=", "value": 0.60},
+    {"id": "AC-1b", "group": "Accuracy", "text": "Hold score of the weakest of the three runs", "metric": "seeds.hold_min", "op": ">=", "value": 0.58},
+    {"id": "AC-1c", "group": "Accuracy", "text": "Building F1 on test", "metric": "test.loc_f1", "op": ">=", "value": 0.75},
+    {"id": "AC-1d", "group": "Accuracy", "text": "Destroyed-class F1 on test", "metric": "test.destroyed", "op": ">=", "value": 0.60},
+    {"id": "AC-1e", "group": "Accuracy", "text": "Minor-damage F1 on test", "metric": "test.minor-damage", "op": ">=", "value": 0.33},
+    {"id": "AC-2a", "group": "New disasters", "text": "Mean score on disasters never seen in training", "metric": "unseen.mean", "op": ">=", "value": 0.40},
+    {"id": "AC-2b", "group": "New disasters", "text": "Lowest single disaster never seen in training", "metric": "unseen.min", "op": ">=", "value": 0.30},
+    {"id": "AC-3a", "group": "Robustness", "text": "Share of the score kept with the before image shifted 8 px", "metric": "robust.shift8", "op": ">=", "value": 0.90},
+    {"id": "AC-3b", "group": "Robustness", "text": "Share of the score kept with the before image rotated 2 degrees", "metric": "robust.rot2", "op": ">=", "value": 0.80},
+    {"id": "AC-4a", "group": "Calibration", "text": "Expected calibration error of the damage head", "metric": "calib.ece", "op": "<=", "value": 0.05},
+    {"id": "AC-4b", "group": "Calibration", "text": "Error among pixels above 70% confidence", "metric": "calib.err70", "op": "<=", "value": 0.08},
+    {"id": "AC-7a", "group": "Records", "text": "Complete run record: code version, data-split hash, seed and command", "metric": "record.complete", "op": "==", "value": true},
+    {"id": "AC-7b", "group": "Records", "text": "Model card written from the run's records", "metric": "record.card", "op": "==", "value": true}
+  ]
+}

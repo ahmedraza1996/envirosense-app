@@ -20,7 +20,22 @@ _hash_cache: dict = {}
 _threshold_cache: dict = {}
 _lock = threading.Lock()
 THRESHOLD_TTL = 30.0
-DEFAULTS = {"review_confidence": 0.7}   # only used by tests that run without the seed; the database value is the source of truth
+# value used only when the database has no row yet (tests that run without the seed); the database value is the source of truth.
+# Each threshold: (default, lowest allowed, highest allowed, what it is)
+LIMITS = {
+    "review_confidence": (0.7, 0.01, 0.99, "Structures below this confidence are marked for review"),
+    "alert_min_severe_m2": (250.0, 25.0, 5000.0, "Severely damaged roof area (m²) that raises an area alert"),
+    "alert_eps_m": (30.0, 5.0, 200.0, "Damage within this distance (m) belongs to one area"),
+    "alert_majority": (0.5, 0.1, 0.95, "High severity when at least this share of the building area is severely damaged"),
+    "abstain_low_conf_share": (0.6, 0.1, 1.0, "The image is not assessed when more than this share of the structures is unsure"),
+    "unusual_max_outside": (2.0, 0.0, 10.0, "An image is unusual when more image statistics than this are outside the training range"),
+    "blank_max_share": (0.4, 0.05, 0.95, "The image is not assessed when more than this share is blank or cloud"),
+    "live_precision_floor": (0.6, 0.1, 0.99, "Incident when fewer than this share of recent reviewed alerts were confirmed"),
+    "live_precision_window": (30.0, 5.0, 500.0, "Number of recent decided alerts the live precision uses"),
+    "drift_ratio": (2.0, 1.1, 10.0, "Incident when the share of unusual uploads grows by this factor"),
+    "rubber_stamp_seconds": (5.0, 1.0, 60.0, "A confirmation faster than this (s) counts as a possible rubber stamp"),
+}
+DEFAULTS = {k: v[0] for k, v in LIMITS.items()}
 
 
 def file_sha256(path: Path) -> str:
@@ -76,8 +91,19 @@ def threshold(key: str) -> float:
 
 def thresholds() -> list:
     with tx() as c:
-        return rows(c, "SELECT DISTINCT ON (key) key, value::float AS value, to_char(effective_from AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') AS effective_utc, "
-                       "set_by, decision_ref, note FROM sem.thresholds WHERE effective_from <= now() ORDER BY key, effective_from DESC, id DESC")
+        rs = rows(c, "SELECT DISTINCT ON (key) id AS version, key, value::float AS value, to_char(effective_from AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') AS effective_utc, "
+                     "set_by, decision_ref, note FROM sem.thresholds WHERE effective_from <= now() ORDER BY key, effective_from DESC, id DESC")
+    for r in rs:
+        lim = LIMITS.get(r["key"])
+        r.update(min=lim[1], max=lim[2], description=lim[3]) if lim else None
+    return rs
+
+
+def threshold_versions(keys) -> dict:
+    """{key: row id} of the values in force: stored with a result, so the exact rule that produced it can be looked up."""
+    with tx() as c:
+        return {r["key"]: r["id"] for r in rows(c, "SELECT DISTINCT ON (key) key, id FROM sem.thresholds WHERE key = ANY(:k) AND effective_from <= now() "
+                                                   "ORDER BY key, effective_from DESC, id DESC", k=list(keys))}
 
 
 def threshold_history(key: str) -> list:
@@ -87,10 +113,11 @@ def threshold_history(key: str) -> list:
 
 
 def set_threshold(key: str, value: float, by: str, decision_ref: str, note: str = "", c=None) -> None:
-    if key not in DEFAULTS:
+    if key not in LIMITS:
         raise ValueError(f"unknown threshold {key}")
-    if not 0 < value < 1:
-        raise ValueError("the review confidence must be between 0 and 1")
+    _, lo, hi, what = LIMITS[key]
+    if not lo <= value <= hi:
+        raise ValueError(f"{what.lower()}: the value must be between {lo:g} and {hi:g}")
     with using(c) as conn:
         run(conn, "INSERT INTO sem.thresholds (key, value, set_by, decision_ref, note) VALUES (:k, :v, :b, :d, :n)", k=key, v=value, b=by, d=decision_ref, n=note)
     _threshold_cache.pop(key, None)

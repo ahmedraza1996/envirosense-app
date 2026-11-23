@@ -15,7 +15,7 @@ from sqlalchemy import exc as sa_exc
 
 from ..db import semantic
 from ..db.engine import engine, one, rows, run, tx
-from . import audit, auth, engines
+from . import audit, auth, decisions, engines
 
 DECISION_LOG = engines.APPROVED.parent / "decision_log.md"
 _STAMP = "YYYY-MM-DD HH24:MI:SS"
@@ -92,16 +92,26 @@ def _after(kind: str, subject: str, payload: dict, requester: str, approver: str
     semantic._threshold_cache.pop(subject, None)
     auth.invalidate_roles()
     how = {"request": rid, "requested_by": requester, "approved_by": approver, "self_approved": self_approved}
+    ref, second = f"approval request {rid}", None if self_approved else approver
     if kind == "model_approval":
         day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         old = outcome.get("previous")
+        gate = payload.get("gate") or {}
+        exc = f" Released with a written exception (gate closed: {', '.join(gate.get('failed', []) + gate.get('missing', []))}): {gate['exception']}" \
+            if gate.get("exception") else ""
         with DECISION_LOG.open("a") as f:
-            f.write(f"| {day} | Application default model changed to `{subject}` (approval request {rid}) | {payload['reason'].replace('|', '/')} | "
+            f.write(f"| {day} | Application default model changed to `{subject}` (approval request {rid}) | {(payload['reason'] + exc).replace('|', '/')} | "
                     f"{requester}{'' if self_approved else ', approved by ' + approver} | [supervisor, pending] |\n")
-        audit.log("model_approval", approver, previous=old, model=subject, reason=payload["reason"], **how)
+        decisions.record("model_release", f"Approved default model changed from {old or 'none'} to {subject}", payload["reason"] + exc, requester, second, ref,
+                         {"previous": old, "model": subject, "gate": gate})
+        audit.log("model_approval", approver, previous=old, model=subject, reason=payload["reason"], gate=gate, **how)
     elif kind == "threshold_change":
+        decisions.record("threshold", f"Threshold {subject} changed from {outcome.get('previous')} to {payload['value']}", payload["reason"], requester, second, ref,
+                         {"key": subject, "previous": outcome.get("previous"), "value": payload["value"]})
         audit.log("threshold_change", approver, key=subject, previous=outcome.get("previous"), value=payload["value"], reason=payload["reason"], **how)
     elif kind == "role_permissions":
+        decisions.record("access", f"Permissions of role {subject} set to {', '.join(outcome['after']) or 'none'}", payload["reason"], requester, second, ref,
+                         {"role": subject, "before": outcome["before"], "after": outcome["after"]})
         audit.log("role_permissions_change", approver, role=subject, before=outcome["before"], after=outcome["after"], reason=payload["reason"], **how)
 
 

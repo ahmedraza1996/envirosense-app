@@ -257,3 +257,27 @@ Tests: 42 pass (7 new in `tests/test_governance.py`, which also covers the appro
   migration 0006 adds the route rule; 404 when switched off).
 - Tests: 2 new in `tests/test_seed.py`. Checked: every account signs in with the shared password and lands in its sections (analyst: the
   damage-assessment sections; administrator: governance and access, now in the same frame as everyone else).
+
+## A20 Governance modules across the life cycle (2026-11-23)
+- **Control register** (`governance/controls.json`, 56 controls in 13 stages) and **frameworks** (`governance/frameworks.json`: EU AI Act as benchmark,
+  NIST AI RMF, ISO/IEC 42001 with 23894 and 42005, OECD, DAMA-DMBOK and OCHA, Pakistan). `api/compliance.py` checks every control's evidence now (tests,
+  live checks, documents, dated records) and scores each framework; the technical file is generated from the same records. `control_matrix.md` is now
+  generated (`app/scripts/control_matrix.py`).
+- **Image intake:** source, licence and a rights confirmation are required; camera and device metadata are stripped from JPEG and PNG without
+  re-encoding; an input-quality summary (blank or cloud, unusual image against the 1st to 99th percentile of 600 xBD training images,
+  `governance/reference_image_stats.json`) joins the input checks. About 1 in 100 typical images is flagged (5 of 400 held-out training images).
+- **Abstention:** a failed input check, or more than 60% of structures below the review confidence, makes the assessment abstain: no alerts, the
+  would-be alerts kept as `withheld_alerts`, "Not assessed: needs a person" on the screen and in the report.
+- **Versioned alert rule:** 250 m², 30 m and 50% are thresholds (with the abstention, quality, monitoring and review-behaviour values); thresholds
+  are append-only (a database trigger refuses edits); every alert records the rule version.
+- **Release gate:** the model registry scores every model against `acceptance_criteria.json`; approval with a closed gate needs a written exception,
+  shown to the approver and kept in the decision log. Model cards are written by the training run (`src/model_card.py`); runs record the data-split hash.
+- **Decision log, incidents, risks, access reviews** are tables in schema `gov` (decisions, incident events and access reviews cannot be changed;
+  incidents cannot be deleted). Retracting an alert opens an incident. **Monitoring** (live precision from reviews, drift, abstention, review
+  behaviour, audit chain) raises one incident per problem.
+- **Reports** now need the export permission and are logged (before, any viewer could open them, unlogged). **Two-step sign-in** (TOTP) for any
+  account; expected for administrators and officers.
+- Screens: Compliance, Model registry (replaces Approved model), Thresholds, Monitoring, Incidents, Risk register, Data register, Decision log,
+  Access review; evidence viewer, abstention banner and "report a problem" on alerts; source, licence and rights in the upload dialog.
+- Migration 0007. Tests: 20 new (`tests/test_governance_modules.py`); the documentation test now checks the register. Workflows, decisions and flow
+  diagrams per stage: `docs/governance_workflows.md`.

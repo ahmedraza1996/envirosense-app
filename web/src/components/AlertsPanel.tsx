@@ -1,10 +1,11 @@
-import { Check, CircleHelp, Download, FileText, RotateCcw, Send, Undo2, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { AlertOctagon, Check, CircleHelp, Download, Eye, FileText, RotateCcw, Send, ShieldAlert, Undo2, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { ReportIncident } from "./Governance";
 import { Alert, AlertContext, api, Assessment, BeforeInfo, CLASS_COLOUR, CLASS_LABEL, CLASSES, Context, can, pct, REVIEW_LABEL, ReviewEntry, Reviews, ReviewStatus, tileNo, titleCase, User } from "../api";
 
 interface Props {
   assessment: Assessment | null; loading: boolean; onAlert: (a: Alert) => void;
-  alertId: string | null; reviews: Reviews | null; onReview: (alertId: string, status: ReviewStatus, note: string) => Promise<void>;
+  alertId: string | null; reviews: Reviews | null; onReview: (alertId: string, status: ReviewStatus, note: string, seconds?: number, evidenceViewed?: boolean) => Promise<void>;
   context: Context | null; user: User;
 }
 
@@ -66,20 +67,42 @@ function ContextLines({ c }: { c: AlertContext }) {
   );
 }
 
-function ReviewCard({ alert, index, entry, context, onReview, user }: {
-  alert: Alert; index: number; entry: ReviewEntry; context: Context | null; user: User;
-  onReview: (alertId: string, status: ReviewStatus, note: string) => Promise<void>;
+function Evidence({ aid, alert, onOpen }: { aid: string; alert: Alert; onOpen: () => void }) {
+  const ids = alert.member_ids.slice(0, 3);
+  return (
+    <details className="evidence-box" onToggle={(e) => { if ((e.target as HTMLDetailsElement).open) onOpen(); }}>
+      <summary><Eye size={14} aria-hidden /> Evidence: before and after of {ids.length} of {alert.member_ids.length} structures</summary>
+      <div className="evidence-grid">
+        {ids.map((id) => (
+          <figure key={id}>
+            <div className="pair"><img src={api.cropUrl(aid, id, "pre")} alt={`Before, structure ${id}`} /><img src={api.cropUrl(aid, id, "post")} alt={`After, structure ${id}`} /></div>
+            <figcaption>{id}</figcaption>
+          </figure>
+        ))}
+      </div>
+    </details>
+  );
+}
+
+function ReviewCard({ aid, alert, index, entry, context, onReview, user }: {
+  aid: string; alert: Alert; index: number; entry: ReviewEntry; context: Context | null; user: User;
+  onReview: (alertId: string, status: ReviewStatus, note: string, seconds?: number, evidenceViewed?: boolean) => Promise<void>;
 }) {
   const [note, setNote] = useState(entry.note);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [reporting, setReporting] = useState(false);
+  const opened = useRef(Date.now());          // how long the decision took and whether the evidence was looked at: the rubber-stamp measure
+  const seen = useRef(false);
+  useEffect(() => { opened.current = Date.now(); seen.current = false; }, [alert.alert_id]);
   useEffect(() => { setNote(entry.note); setErr(null); }, [alert.alert_id, entry.note]);
   const save = async (status: ReviewStatus) => {
     setErr(null);
     if ((status === "dismissed" || status === "retracted") && !note.trim()) { setErr(`A reason is required to ${status === "dismissed" ? "dismiss" : "retract"} an alert.`); return; }
     if (status === "pending" && entry.status === "proposed" && !note.trim()) { setErr("Say why the proposal is returned."); return; }
     setBusy(true);
-    try { await onReview(alert.alert_id, status, note); } catch (e) { setErr(String(e)); } finally { setBusy(false); }
+    try { await onReview(alert.alert_id, status, note, (Date.now() - opened.current) / 1000, seen.current); opened.current = Date.now(); }
+    catch (e) { setErr(String(e)); } finally { setBusy(false); }
   };
   const c = context?.available ? context.alerts[alert.alert_id] : undefined;
   const officer = can(user, "approve");
@@ -99,6 +122,7 @@ function ReviewCard({ alert, index, entry, context, onReview, user }: {
         {alert.low_confidence_structures != null && <><dt>Unsure structures</dt><dd>{alert.low_confidence_structures} of {alert.structures}{alert.low_confidence_share! >= 0.5 ? " (weak evidence: check first)" : ""}</dd></>}
       </dl>
       {c && <ContextLines c={c} />}
+      <Evidence aid={aid} alert={alert} onOpen={() => { seen.current = true; }} />
       {context?.available === null && <p className="meta">Looking up nearby facilities…</p>}
       {context?.available === false && <p className="meta" title={context.error}>Nearby facilities unavailable (OpenStreetMap not reachable).</p>}
       <label className="field-block">
@@ -124,6 +148,8 @@ function ReviewCard({ alert, index, entry, context, onReview, user }: {
         </details>
       )}
       {err && <p className="meta error-text">{err}</p>}
+      <button className="link report-link" onClick={() => setReporting(true)}><AlertOctagon size={13} aria-hidden /> Report a problem with this alert</button>
+      <ReportIncident open={reporting} onClose={() => setReporting(false)} assessment={aid} alertId={alert.alert_id} />
     </div>
   );
 }
@@ -160,11 +186,22 @@ export default function AlertsPanel({ assessment: a, loading, onAlert, alertId, 
       <section>
         <h1>{upload ? a.scene.name : `${titleCase(a.scene.disaster)}, tile ${tileNo(a.pair_id)}`}</h1>
         <p className="meta">{upload ? `${titleCase(a.scene.disaster_type)} · uploaded imagery` : "Benchmark tile"} · no building inventory used</p>
-        <div className="actions">
-          <a className="button" href={api.reportUrl(a.id, "html")} target="_blank" rel="noreferrer"><FileText size={16} aria-hidden />Situation report</a>
-          <a className="button ghost" href={api.reportUrl(a.id, "md")} download><Download size={16} aria-hidden />Markdown</a>
-        </div>
+        {can(user, "export") && (
+          <div className="actions">
+            <a className="button" href={api.reportUrl(a.id, "html")} target="_blank" rel="noreferrer"><FileText size={16} aria-hidden />Situation report</a>
+            <a className="button ghost" href={api.reportUrl(a.id, "md")} download><Download size={16} aria-hidden />Markdown</a>
+          </div>
+        )}
       </section>
+
+      {a.abstained && (
+        <section className="abstained" role="status">
+          <h2><ShieldAlert size={18} aria-hidden /> Not assessed: needs a person</h2>
+          <p>The system declined to raise alerts here rather than guess. Look at the imagery yourself.</p>
+          <ul>{(a.abstain_reasons ?? []).map((r) => <li key={r.code}>{r.message}</li>)}</ul>
+          {(a.withheld_alerts?.length ?? 0) > 0 && <p className="meta">{a.withheld_alerts!.length} area{a.withheld_alerts!.length === 1 ? "" : "s"} would have been flagged; they are kept in the record but not shown as alerts.</p>}
+        </section>
+      )}
 
       <section>
         <div className="headline">
@@ -187,8 +224,8 @@ export default function AlertsPanel({ assessment: a, loading, onAlert, alertId, 
               ))}
             </tbody>
           </table>
-        ) : <p className="empty-note" style={{ marginTop: 8 }}>No area meets the alert rule {upload ? "in this image" : "on this tile"}.</p>}
-        {selIndex >= 0 && <ReviewCard alert={alerts[selIndex]} index={selIndex + 1} entry={entryOf(alerts[selIndex].alert_id)} context={context} onReview={onReview} user={user} />}
+        ) : <p className="empty-note" style={{ marginTop: 8 }}>{a.abstained ? "No alerts: the image was not assessed (see above)." : `No area meets the alert rule ${upload ? "in this image" : "on this tile"}.`}</p>}
+        {selIndex >= 0 && <ReviewCard aid={a.id} alert={alerts[selIndex]} index={selIndex + 1} entry={entryOf(alerts[selIndex].alert_id)} context={context} onReview={onReview} user={user} />}
         {counts && alerts.length > 0 && (
           <p className="review-tally">{counts.confirmed} confirmed · {counts.proposed} awaiting approval · {counts.needs_info} need information · {counts.pending} draft · {counts.dismissed} dismissed</p>
         )}
@@ -242,7 +279,8 @@ export default function AlertsPanel({ assessment: a, loading, onAlert, alertId, 
         <p className="provenance">
           {a.model.label} · {a.model.arch} · epoch {a.model.epoch + 1}<br />
           {a.model.checkpoint}<br />
-          {a.model.git_commit.startsWith("not") ? "commit not recorded" : `commit ${a.model.git_commit.slice(0, 10)}`} · {a.created_utc} UTC
+          {a.model.git_commit.startsWith("not") ? "training commit not recorded" : `training commit ${a.model.git_commit.slice(0, 10)}`}
+          {a.provenance?.app_commit ? ` · app ${a.provenance.app_commit.slice(0, 10)}` : ""}{a.alert_rule_version ? ` · alert rule v${a.alert_rule_version}` : ""} · {a.created_utc} UTC
         </p>
       </section>
     </>

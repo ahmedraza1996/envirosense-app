@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import { accounts, User } from "./api";
 import { ChangePassword, Login } from "./components/Account";
 import AppShell, { Section, sectionsFor } from "./components/AppShell";
-import { Approvals, AuditView, ModelApproval, Roles, Units, Users } from "./components/Admin";
+import { Approvals, AuditView, Roles, Units, Users } from "./components/Admin";
+import { AccessReview, Compliance, DataRegisterView, DecisionLog, Incidents, ModelRegistry, MonitoringView, RiskRegister, Thresholds } from "./components/Governance";
 import { Workspace } from "./App";
 
 /** Signed-out, first-sign-in and the one application frame for every role. The server decides what each role may do; this only
@@ -36,8 +37,16 @@ export default function Shell() {
       {current === "units" && <Units />}
       {current === "roles" && <Roles />}
       {current === "approvals" && <Approvals me={user} onChange={() => undefined} />}
-      {current === "model" && <ModelApproval />}
       {current === "audit" && <AuditView />}
+      {current === "compliance" && <Compliance me={user} />}
+      {current === "registry" && <ModelRegistry me={user} />}
+      {current === "thresholds" && <Thresholds me={user} />}
+      {current === "monitoring" && <MonitoringView />}
+      {current === "incidents" && <Incidents me={user} />}
+      {current === "risks" && <RiskRegister me={user} />}
+      {current === "data" && <DataRegisterView />}
+      {current === "decisions" && <DecisionLog />}
+      {current === "access" && <AccessReview me={user} />}
     </AppShell>
   );
 }

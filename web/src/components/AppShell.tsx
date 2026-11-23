@@ -1,6 +1,7 @@
 import { ReactNode, useCallback, useEffect, useState } from "react";
 import {
-  BadgeCheck, ClipboardCheck, Cpu, FlaskConical, Globe2, Layers, LucideIcon, Network, ScrollText, ShieldCheck, Users as UsersIcon,
+  Activity, AlertOctagon, BadgeCheck, ClipboardCheck, ClipboardList, Cpu, Database, FlaskConical, Globe2, Layers, LucideIcon, Network, ScrollText, ShieldAlert,
+  ShieldCheck, SlidersHorizontal, UserCheck, Users as UsersIcon,
 } from "lucide-react";
 import { accounts, can, User } from "../api";
 import { AccountChip } from "./Account";
@@ -8,21 +9,31 @@ import { AccountChip } from "./Account";
 /** One frame for every role: the same navigation, top bar and account menu. Each role sees only the sections it may use;
  *  the server still decides what each request may do. */
 
-export type Section = "assessments" | "events" | "benchmark" | "approvals" | "model" | "audit" | "users" | "units" | "roles";
+export type Section = "assessments" | "events" | "benchmark" | "compliance" | "registry" | "thresholds" | "monitoring" | "incidents" | "risks" | "data"
+  | "decisions" | "approvals" | "audit" | "users" | "units" | "roles" | "access";
 
 interface NavItem { id: Section; label: string; icon: LucideIcon; group: string; show: (u: User) => boolean; full?: boolean }
 
 const admin = (u: User) => can(u, "users");
+const oversee = (u: User) => can(u, "audit") || can(u, "model_approve");
 export const NAV: NavItem[] = [
   { id: "assessments", label: "Assessments", icon: Layers, group: "Damage assessment", show: (u) => can(u, "view"), full: true },
   { id: "events", label: "Events", icon: Globe2, group: "Damage assessment", show: (u) => can(u, "view"), full: true },
   { id: "benchmark", label: "Model check", icon: FlaskConical, group: "Damage assessment", show: (u) => can(u, "view"), full: true },
+  { id: "compliance", label: "Compliance", icon: ShieldCheck, group: "Governance", show: (u) => can(u, "audit") },
+  { id: "registry", label: "Model registry", icon: Cpu, group: "Governance", show: oversee },
+  { id: "thresholds", label: "Thresholds", icon: SlidersHorizontal, group: "Governance", show: oversee },
+  { id: "monitoring", label: "Monitoring", icon: Activity, group: "Governance", show: (u) => oversee(u) || can(u, "approve") },
+  { id: "incidents", label: "Incidents", icon: ShieldAlert, group: "Governance", show: () => true },
+  { id: "risks", label: "Risk register", icon: AlertOctagon, group: "Governance", show: (u) => can(u, "audit") },
+  { id: "data", label: "Data register", icon: Database, group: "Governance", show: (u) => can(u, "audit") },
+  { id: "decisions", label: "Decision log", icon: ClipboardList, group: "Governance", show: (u) => can(u, "audit") },
   { id: "approvals", label: "Approvals", icon: ClipboardCheck, group: "Governance", show: (u) => admin(u) || can(u, "model_approve") },
-  { id: "model", label: "Approved model", icon: Cpu, group: "Governance", show: (u) => admin(u) || can(u, "model_approve") },
   { id: "audit", label: "Audit log", icon: ScrollText, group: "Governance", show: (u) => admin(u) || can(u, "audit") },
   { id: "users", label: "Users", icon: UsersIcon, group: "Access", show: admin },
   { id: "units", label: "Units", icon: Network, group: "Access", show: admin },
-  { id: "roles", label: "Roles", icon: ShieldCheck, group: "Access", show: admin },
+  { id: "roles", label: "Roles", icon: BadgeCheck, group: "Access", show: admin },
+  { id: "access", label: "Access review", icon: UserCheck, group: "Access", show: admin },
 ];
 
 export function sectionsFor(u: User): NavItem[] { return NAV.filter((n) => n.show(u)); }

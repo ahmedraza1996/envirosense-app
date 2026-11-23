@@ -47,7 +47,8 @@ def load(aid: str) -> dict:
     return {"alerts": out}
 
 
-def set_review(aid: str, rec: dict, alert_id: str, status: str, note: str = "", by: str = "", role: str = "officer", unit: str = "") -> dict:
+def set_review(aid: str, rec: dict, alert_id: str, status: str, note: str = "", by: str = "", role: str = "officer", unit: str = "",
+               seconds: float | None = None, evidence_viewed: bool | None = None) -> dict:
     """Four-eyes rule: only an officer confirms, and only an alert another person proposed. An analyst proposes, dismisses or asks for information."""
     if status not in STATUSES:
         raise ReviewError(f"status must be one of {', '.join(STATUSES)}")
@@ -87,9 +88,9 @@ def set_review(aid: str, rec: dict, alert_id: str, status: str, note: str = "", 
                    "reviewed_by = CASE WHEN :s = 'pending' THEN NULL ELSE CAST(:b AS text) END, reviewed_at = CASE WHEN :s = 'pending' THEN NULL ELSE now() END, "
                    "proposed_by = :p, version = wf.alert_reviews.version + 1",
                 a=aid, i=alert_id, s=status, n=note, b=by, p=proposed_by)
-            run(c, "INSERT INTO wf.alert_review_events (assessment_id, alert_id, seq, status, note, actor, role, unit_id) "
-                   "SELECT :a, :i, COALESCE(MAX(seq), 0) + 1, :s, :n, :b, :r, :u FROM wf.alert_review_events WHERE assessment_id = :a AND alert_id = :i",
-                a=aid, i=alert_id, s=status, n=note, b=by, r=role, u=unit)
+            run(c, "INSERT INTO wf.alert_review_events (assessment_id, alert_id, seq, status, note, actor, role, unit_id, seconds_to_decide, evidence_viewed) "
+                   "SELECT :a, :i, COALESCE(MAX(seq), 0) + 1, :s, :n, :b, :r, :u, :sec, :ev FROM wf.alert_review_events WHERE assessment_id = :a AND alert_id = :i",
+                a=aid, i=alert_id, s=status, n=note, b=by, r=role, u=unit, sec=None if seconds is None else max(0.0, min(float(seconds), 86400.0)), ev=evidence_viewed)
     except sa_exc.IntegrityError as e:
         raise ReviewError("the database refused this change: " + str(getattr(e.orig, "diag", None) and e.orig.diag.message_primary or "constraint violated")) from e
     return load(aid)["alerts"][alert_id]

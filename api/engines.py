@@ -234,6 +234,7 @@ def discover_models() -> dict:
         ("clf_B", "Crop classifier B (pre + post)", "classifier", "B_r18_official"),
         ("clf_A", "Crop classifier A (post only)", "classifier", "A_r18_official"),
         ("unet_paired_mis", "Siamese U-Net, trained with misaligned pairs (pre + post)", "unet", "S_r34_paired_mis"),
+        ("unet_paired_aug", "Siamese U-Net, misalignment augmentation only (pre + post)", "unet", "S_r34_paired_aug"),
         ("unet_paired_ext", "Siamese U-Net, 80 epochs (pre + post)", "unet", "S_r34_paired_ext"),
         ("unet_paired", "Siamese U-Net, 40 epochs (pre + post)", "unet", "S_r34_paired"),
         ("unet_early", "Full-image U-Net (pre + post, early fusion)", "unet", "S_r34_early"),

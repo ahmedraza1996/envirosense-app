@@ -117,6 +117,9 @@ def area_markdown(aid: str, f: dict) -> str:
                 f"Alert {shown[0][0]} ({x['severity']}) around {latlon(x['centroid_lat'], x['centroid_lon'])}: "
                 f"{fmt_area(x['severe_area_m2'])} of severely damaged roof, {x['severe_share']:.0%} of the building area "
                 f"there, over an extent of {fmt_area(x['area_m2'])}.")
+    elif a.get("abstained"):
+        lead = ("NOT ASSESSED: the system declined to raise alerts here and a person must look at the imagery. Why: "
+                + " ".join(r["message"] for r in a.get("abstain_reasons", [])))
     else:
         lead = "No area meets the alert rule on this tile." if not dismissed else "All area alerts were dismissed by the analyst."
     sev = p["destroyed"] + p["major-damage"]

@@ -36,6 +36,9 @@ export default function UploadDialog({ models, onClose, onCreated }: Props) {
   const [policy, setPolicy] = useState("");
   useEffect(() => { api.policy().then((p) => setPolicy(p.notice)).catch(() => undefined); }, []);
   const [date, setDate] = useState("");
+  const [source, setSource] = useState("");
+  const [licence, setLicence] = useState("");
+  const [rights, setRights] = useState(false);
   const [model, setModel] = useState(bestUnet(models)?.id ?? "");
   const [corners, setCorners] = useState<Corners>({});
   const [beforeCorners, setBeforeCorners] = useState<Corners>({});
@@ -54,6 +57,8 @@ export default function UploadDialog({ models, onClose, onCreated }: Props) {
       if (m.name) setName(String(m.name));
       if (DISASTER_TYPES.includes(m.disaster_type)) setType(m.disaster_type);
       if (m.event_date) setDate(String(m.event_date).slice(0, 10));
+      if (m.source) setSource(String(m.source));
+      if (m.licence) setLicence(String(m.licence));
       const a = asCorners(m.after_corners), b = asCorners(m.before_corners);
       if (a) setCorners(a);
       if (b) setBeforeCorners(b);
@@ -78,6 +83,9 @@ export default function UploadDialog({ models, onClose, onCreated }: Props) {
     form.append("event_date", date);
     form.append("model_id", model);
     form.append("review_alignment", "true");
+    form.append("source", source.trim());
+    form.append("licence", licence.trim());
+    form.append("rights_confirmed", rights ? "true" : "false");
     if (needCorners) CORNERS.forEach((c) => form.append(c, corners[c] ?? ""));
     if (needBeforeCorners) CORNERS.forEach((c) => form.append(`before_${c}`, beforeCorners[c] ?? ""));
     setBusy(true);
@@ -157,12 +165,29 @@ export default function UploadDialog({ models, onClose, onCreated }: Props) {
               </select>
             </label>
           </div>
+          <fieldset className="field rights">
+            <legend>Where the images come from</legend>
+            <div className="row-2">
+              <label className="field">
+                <span>Source</span>
+                <input type="text" required value={source} placeholder="e.g. Maxar Open Data, SUPARCO, own drone survey" onChange={(e) => setSource(e.target.value)} />
+              </label>
+              <label className="field">
+                <span>Licence or agreement</span>
+                <input type="text" required value={licence} placeholder="e.g. CC BY-NC 4.0, data-sharing agreement 2026/14" onChange={(e) => setLicence(e.target.value)} />
+              </label>
+            </div>
+            <label className="inline-check">
+              <input type="checkbox" checked={rights} onChange={(e) => setRights(e.target.checked)} />
+              I have the right to process these images for damage assessment. Camera and device details are removed from the files on upload.
+            </label>
+          </fieldset>
         </div>
 
         {error && <p className="form-error" role="alert">{error}</p>}
         <footer>
           <button type="button" className="button" onClick={onClose} disabled={busy}>Cancel</button>
-          <button type="submit" className="button primary" disabled={busy || !after || !model}>
+          <button type="submit" className="button primary" disabled={busy || !after || !model || source.trim().length < 3 || licence.trim().length < 2 || !rights}>
             {busy ? "Uploading…" : "Upload and check alignment"}
           </button>
         </footer>

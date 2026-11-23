@@ -17,6 +17,8 @@ from app.api.scenes import catalogue, geotransforms
 
 pytestmark = pytest.mark.skipif("unet_post" not in service.models(), reason="needs the post-only U-Net checkpoint")
 
+RIGHTS = {"source": "xBD hold split (test)", "licence": "xBD terms (research)", "rights_confirmed": "true"}
+
 
 @pytest.fixture(scope="module")
 def tile():
@@ -87,12 +89,12 @@ def test_api_plain_image_with_corners(tile, store):
     client = TestClient(app)
     ok, jpg = cv2.imencode(".jpg", cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
     files = {"after": ("after.jpg", jpg.tobytes(), "image/jpeg")}
-    r = client.post("/api/uploads", files=files, data={"name": "x", "disaster_type": "fire", "model_id": "unet_post"})
+    r = client.post("/api/uploads", files=files, data={"name": "x", "disaster_type": "fire", "model_id": "unet_post", **RIGHTS})
     assert r.status_code == 400 and "corner" in r.text
     gt = tf.to_gdal()
     corners = {"west": gt[0], "north": gt[3], "east": gt[0] + 1024 * gt[1], "south": gt[3] + 1024 * gt[5]}
     r = client.post("/api/uploads", files=files, data={"name": "Plain JPEG", "disaster_type": "fire",
-                                                       "model_id": "unet_post", **corners})
+                                                       "model_id": "unet_post", **corners, **RIGHTS})
     assert r.status_code == 200, r.text
     uid = r.json()["id"]
     for _ in range(300):
@@ -122,7 +124,7 @@ def test_plain_pair_with_its_own_before_corners(tile, store):
     client = TestClient(app)
     files = {"after": ("post.jpg", cv2.imencode(".jpg", cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))[1].tobytes(), "image/jpeg"),
              "before": ("pre.jpg", cv2.imencode(".jpg", pre)[1].tobytes(), "image/jpeg")}
-    data = {"name": "Pair", "disaster_type": "fire", "model_id": "unet_post", **corners(tf.to_gdal()),
+    data = {"name": "Pair", "disaster_type": "fire", "model_id": "unet_post", **corners(tf.to_gdal()), **RIGHTS,
             **{f"before_{k}": v for k, v in corners(gt_pre).items()}}
     r = client.post("/api/uploads", files=files, data=data)
     assert r.status_code == 200, r.text
@@ -137,7 +139,7 @@ def test_plain_pair_with_its_own_before_corners(tile, store):
     assert b["kind"] == "upload" and b["coverage"] > 0.95
     # a plain before image with neither its own corners nor an after image to borrow them from is refused
     r = client.post("/api/uploads", files={"after": ("a.tif", open(uploads.folder(uid) / "after_input.jpg", "rb").read(), "image/tiff"),
-                                           "before": files["before"]}, data={"name": "x", "disaster_type": "fire", "model_id": "unet_post"})
+                                           "before": files["before"]}, data={"name": "x", "disaster_type": "fire", "model_id": "unet_post", **RIGHTS})
     assert r.status_code == 400 and "before" in r.text
 
 

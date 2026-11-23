@@ -152,7 +152,7 @@ def test_only_an_administrator_changes_the_approved_model_and_it_is_logged(tmp_p
     top = next(iter(auth.units()))
     adm, ana = mk("model_admin", "admin", top), mk("model_analyst", "analyst", top)
     only_admin("model_admin")                                                                       # nobody else could approve: the change is made at once
-    body = {"model_id": "unet_b", "reason": "ablation shows the gain is from augmentation"}
+    body = {"model_id": "unet_b", "reason": "ablation shows the gain is from augmentation", "exception": "test models have no run records; released to test the approval workflow"}
     assert c.put("/api/admin/approved-model", headers=ana, json=body).status_code == 403
     assert c.put("/api/admin/approved-model", headers=adm, json={**body, "reason": "short"}).status_code == 400
     assert c.put("/api/admin/approved-model", headers=adm, json={**body, "model_id": "clf"}).status_code == 400

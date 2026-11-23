@@ -17,7 +17,31 @@ from app.db import semantic
 
 APP = Path(__file__).resolve().parents[1]
 RESET = ("audit.log, iam.sessions, iam.login_throttle, iam.users, iam.units, ingest.job_steps, ingest.jobs, ingest.uploads, "
-         "core.alerts, core.assessments, wf.alert_review_events, wf.alert_reviews, wf.approval_requests, sem.model_versions")
+         "core.alerts, core.assessments, wf.alert_review_events, wf.alert_reviews, wf.approval_requests, sem.model_versions, "
+         "gov.incident_events, gov.incidents, gov.decisions, gov.access_reviews")
+
+
+# ---- the result of every test, as evidence for the compliance page (api/compliance.py reads runs/app/test_results.json) ----------
+_RESULTS: dict = {}
+
+
+def pytest_runtest_logreport(report):
+    name = report.nodeid.split("::")[-1].split("[")[0]
+    if report.when == "call" or report.outcome != "passed":
+        if _RESULTS.get(name) != "failed":
+            _RESULTS[name] = report.outcome
+
+
+def pytest_sessionfinish(session, exitstatus):
+    if not _RESULTS:
+        return
+    from app.api.compliance import TEST_RESULTS
+    try:
+        old = json.loads(TEST_RESULTS.read_text()).get("tests", {})
+    except (OSError, ValueError):
+        old = {}
+    TEST_RESULTS.parent.mkdir(parents=True, exist_ok=True)
+    TEST_RESULTS.write_text(json.dumps({"finished_utc": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"), "tests": {**old, **_RESULTS}}, indent=1))
 
 
 def migrate(target="head"):
@@ -40,7 +64,9 @@ def reset_database():
         c.exec_driver_sql("ALTER TABLE audit.log DISABLE TRIGGER USER")        # the audit log refuses truncation; only the owner clears it, between tests
         c.exec_driver_sql(f"TRUNCATE {RESET} RESTART IDENTITY CASCADE")
         c.exec_driver_sql("ALTER TABLE audit.log ENABLE TRIGGER USER")
+        c.exec_driver_sql("ALTER TABLE sem.thresholds DISABLE TRIGGER USER")       # thresholds are never edited; only the owner removes test values
         c.exec_driver_sql("DELETE FROM sem.thresholds WHERE set_by <> 'migration'")
+        c.exec_driver_sql("ALTER TABLE sem.thresholds ENABLE TRIGGER USER")
         c.exec_driver_sql("DELETE FROM iam.roles WHERE NOT builtin")
     semantic._threshold_cache.clear()
     auth.invalidate_roles()

@@ -188,29 +188,29 @@ def test_exported_alert_traces_to_its_inputs_and_checkpoint():
 
 
 def test_every_control_in_place_names_evidence_that_exists():
-    """Documentation completeness: a file or test named as evidence for a control marked in place must exist."""
-    import re
+    """Documentation completeness: every control in governance/controls.json names evidence that exists (a test function, a file, a live check), and
+    every framework requirement is carried by at least one control."""
     from pathlib import Path
-    app = Path(__file__).resolve().parents[1]
-    roots = [app, app.parent]
-    exts = (".py", ".md", ".json", ".csv", ".tsx", ".ts")
+    from app.api import compliance
+    app_dir = Path(__file__).resolve().parents[1]
     missing = []
-    for line in (app / "governance" / "control_matrix.md").read_text().splitlines():
-        cells = [c.strip() for c in line.strip().strip("|").split("|")]
-        if len(cells) < 6 or not cells[3].startswith("in place"):
-            continue
-        for tok in re.findall(r"`([^`]+)`", cells[4]):
-            path, _, test = tok.replace("()", "").partition("::")
-            if " " in path or path.startswith(("runs/", "/")) or not path.endswith(exts):
-                continue
-            found = [r / path for r in roots if list(r.glob(path))]
-            if not found:
-                missing.append(f"{cells[0]}: {path}")
-            elif test and not any(test in f.read_text() for f in found):
-                missing.append(f"{cells[0]}: {path}::{test}")
+    for c in compliance.controls()["controls"]:
+        for e in c["evidence"]:
+            if e["type"] == "test":
+                path, _, name = e["ref"].partition("::")
+                f = app_dir / path
+                if not f.exists() or f"def {name}(" not in f.read_text():
+                    missing.append(f"{c['id']}: {e['ref']}")
+            elif e["type"] in ("file", "file_contains") and not (app_dir / e["ref"]).resolve().exists():
+                missing.append(f"{c['id']}: {e['ref']}")
+            elif e["type"] == "live" and e["check"] not in compliance.LIVE:
+                missing.append(f"{c['id']}: live check {e['check']}")
     assert missing == []
-    for name in ("acceptance_criteria.md", "incident_procedure.md", "incident_log.md", "oversight_test_protocol.md", "intended_use.md", "roles.md"):
-        assert (app / "governance" / name).exists(), name
+    tags = {(k, t) for c in compliance.controls()["controls"] for k, v in c["frameworks"].items() for t in v}
+    assert all((f["key"], r["id"]) in tags for f in compliance.frameworks()["frameworks"] for r in f["requirements"])
+    for name in ("acceptance_criteria.md", "acceptance_criteria.json", "incident_procedure.md", "oversight_test_protocol.md", "intended_use.md", "roles.md",
+                 "ai_policy.md", "impact_assessment.md"):
+        assert (app_dir / "governance" / name).exists(), name
 
 
 def test_incident_report_lists_retractions_denied_actions_and_failed_sign_ins():

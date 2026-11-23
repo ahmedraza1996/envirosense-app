@@ -14,7 +14,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from ..db import semantic
-from . import accounts, audit, auth, catalogue_routes, context, engines, events, geocal, geoimage, report, reviews, seed, service, uploads
+from . import (accounts, audit, auth, catalogue_routes, context, engines, events, geocal, geoimage, gov_routes, incident_register, input_quality,
+               monitoring, report, reviews, seed, service, uploads)
 from .scenes import catalogue, image_jpeg, scene
 
 
@@ -44,6 +45,7 @@ async def authenticate(request: Request):
 app = FastAPI(title="EnviroSense damage assessment", version="0.1", dependencies=[Depends(authenticate)])
 app.include_router(accounts.router)
 app.include_router(catalogue_routes.router)
+app.include_router(gov_routes.router)
 WEB = Path(__file__).resolve().parents[1] / "web" / "dist"
 
 
@@ -127,9 +129,16 @@ async def create_upload(after: UploadFile = File(...), before: UploadFile | None
                         east: float | None = Form(None), north: float | None = Form(None),
                         before_west: float | None = Form(None), before_south: float | None = Form(None),
                         before_east: float | None = Form(None), before_north: float | None = Form(None),
-                        review_alignment: bool = Form(False)):
+                        review_alignment: bool = Form(False), source: str = Form(""), licence: str = Form(""), rights_confirmed: bool = Form(False)):
     """After image (+ optional before image) and metadata; processed in the background, poll GET /api/uploads/{id}.
-    Plain PNG/JPEG need the after image's corner coordinates (degrees, north-up); GeoTIFFs carry their own."""
+    Plain PNG/JPEG need the after image's corner coordinates (degrees, north-up); GeoTIFFs carry their own.
+    Every upload states where the imagery comes from (source), its licence, and that the uploader has the right to process it (control I1);
+    camera and device metadata are removed from the files before anything else reads them (control I3)."""
+    source, licence = source.strip()[:200], licence.strip()[:200]
+    if len(source) < 3 or len(licence) < 2:
+        raise HTTPException(400, "say where the imagery comes from (source) and under which licence or agreement it may be used")
+    if not rights_confirmed:
+        raise HTTPException(400, "confirm that you have the right to process these images")
     models = service.models()
     if model_id not in models or models[model_id]["kind"] != "unet":
         raise HTTPException(400, "uploads need a full-image U-Net model")
@@ -160,9 +169,13 @@ async def create_upload(after: UploadFile = File(...), before: UploadFile | None
     except HTTPException:
         shutil.rmtree(d, ignore_errors=True)
         raise
+    stripped = [input_quality.strip_metadata(f) for f in (a, b) if f is not None]
+    privacy = {"removed": sorted({x for s_ in stripped for x in s_["removed"]}), "kept": next((s_["kept"] for s_ in stripped if s_["kept"]), "")}
     uploads.create(a, {"name": name.strip()[:80] or "Untitled upload", "disaster_type": disaster_type,
                        "event_date": event_date or None, "model_id": model_id, "after_bounds": bounds,
-                       "before_bounds": before_bounds, "review_alignment": review_alignment}, b)
+                       "before_bounds": before_bounds, "review_alignment": review_alignment, "source": source, "licence": licence,
+                       "rights_confirmed_by": auth.actor(), "privacy": privacy}, b)
+    audit.log("upload", auth.actor(), a.parent.name, source=source, licence=licence, metadata_removed=privacy["removed"])
     return uploads.info(uid)
 
 
@@ -297,6 +310,8 @@ def area_record_or_404(aid):
 class ReviewBody(BaseModel):
     status: str
     note: str = ""
+    seconds: float | None = None            # from opening the alert to this decision (reported by the screen; for the rubber-stamp measure)
+    evidence_viewed: bool | None = None
 
 
 @app.get("/api/assessments/{aid}/reviews")
@@ -311,7 +326,7 @@ def put_review(aid: str, alert_id: str, body: ReviewBody):
     rec = area_record_or_404(aid)
     try:
         u = auth.current()
-        e = reviews.set_review(aid, rec, alert_id, body.status, body.note, u["username"], u["role"], u["unit"])
+        e = reviews.set_review(aid, rec, alert_id, body.status, body.note, u["username"], u["role"], u["unit"], body.seconds, body.evidence_viewed)
     except PermissionError as err:
         audit.log("denied", auth.actor(), aid, alert_id=alert_id, status=body.status, why=str(err))
         raise HTTPException(403, str(err))
@@ -320,7 +335,10 @@ def put_review(aid: str, alert_id: str, body: ReviewBody):
     except reviews.ReviewError as err:
         raise HTTPException(400, str(err))
     audit.log("review", auth.actor(), aid, alert_id=alert_id, status=body.status, note=body.note, model=rec["model"].get("id"),
-              checkpoint_sha256=(rec.get("provenance") or {}).get("checkpoint", {}).get("sha256"))
+              checkpoint_sha256=(rec.get("provenance") or {}).get("checkpoint", {}).get("sha256"), seconds=body.seconds, evidence_viewed=body.evidence_viewed)
+    if body.status == "retracted":            # a confirmed alert turned out wrong: that is an incident (control N2)
+        incident_register.open_incident("wrong_alert", "high", f"Confirmed alert {alert_id} retracted", f"Reason given: {body.note}", auth.actor(), "check",
+                                        u["unit"], {"assessment": aid, "alert_id": alert_id}, dedup_key=f"retract:{aid}:{alert_id}")
     return {"alert_id": alert_id, **e, "counts": reviews.counts(rec, reviews.load(aid))}
 
 
@@ -384,6 +402,10 @@ def _retention():
     uploads.purge_expired()
     uploads.requeue_stale()
     uploads._ensure_worker()                                  # picks up jobs that were queued or interrupted before this start
+    try:
+        monitoring.check()                                    # the monitoring floors and the audit chain, once at every start
+    except Exception as e:  # noqa: BLE001  a failing check must not stop the application; it is logged
+        audit.log("monitoring_failed", "system (monitoring)", None, error=f"{type(e).__name__}: {e}")
 
 
 # ---- audit ------------------------------------------------------------------------------------------------------
@@ -539,8 +561,8 @@ def get_assessment(aid: str):
 @app.get("/api/assessments/{aid}/summary")
 def get_summary(aid: str):
     rec = json.loads(stored(aid).read_text())
-    keys = ("id", "kind", "scene", "model", "summary", "zones", "alerts", "alert_rule", "isolated_severe", "benchmark",
-            "scene_metrics", "review_confidence_threshold", "has_damage_map")
+    keys = ("id", "kind", "scene", "model", "summary", "zones", "alerts", "alert_rule", "alert_rule_version", "isolated_severe", "benchmark",
+            "scene_metrics", "review_confidence_threshold", "has_damage_map", "abstained", "abstain_reasons", "withheld_alerts")
     return {k: rec[k] for k in keys if k in rec}
 
 
@@ -584,7 +606,11 @@ def get_crop(pair_id: str, uid: str, phase: str):
         raise HTTPException(404, f"no building {uid} in {pair_id}")
 
 
-def report_or_404(fn, aid):
+def report_or_404(fn, aid, fmt=None):
+    """Reports need the export permission (route policy) and stay inside the caller's unit tree; every download is in the audit log (control E1)."""
+    stored(aid)
+    if fmt:
+        audit.log("export", auth.actor(), aid, kind=f"report.{fmt}")
     try:
         return fn(aid)
     except FileNotFoundError:
@@ -595,14 +621,14 @@ def report_or_404(fn, aid):
 
 @app.get("/api/assessments/{aid}/report.md", response_class=PlainTextResponse)
 def get_report_md(aid: str):
-    text = report_or_404(report.markdown, aid)
+    text = report_or_404(report.markdown, aid, "md")
     return PlainTextResponse(text, media_type="text/markdown",
                              headers={"Content-Disposition": f'attachment; filename="sitrep_{aid}.md"'})
 
 
 @app.get("/api/assessments/{aid}/report.html", response_class=HTMLResponse)
 def get_report_html(aid: str):
-    return HTMLResponse(report_or_404(report.to_html, aid))
+    return HTMLResponse(report_or_404(report.to_html, aid, "html"))
 
 
 @app.get("/api/assessments/{aid}/report-map.png")
