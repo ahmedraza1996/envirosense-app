@@ -606,6 +606,7 @@ details.evidence-box { margin: 10px 0; font-size: 13px; } details.evidence-box s
 .evidence-grid { display: grid; gap: 10px; margin-top: 8px; } .evidence-grid .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
 .evidence-grid img { width: 100%; border-radius: 6px; display: block; } .evidence-grid figure { margin: 0; } .evidence-grid figcaption { font-size: 11px; color: var(--ink-3); }
 .report-link { display: inline-flex; align-items: center; gap: 4px; font-size: 12.5px; margin-top: 8px; }
-fieldset.rights { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; display: grid; gap: 10px; }
+fieldset.rights { grid-column: 1 / -1; border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; display: grid; gap: 10px; }
 fieldset.rights legend { font-weight: 600; font-size: 13px; padding: 0 4px; }
 @media (max-width: 960px) { .split { grid-template-columns: 1fr; } ul.evidence li { grid-template-columns: 1fr; } }
+fieldset.rights .inline-check { display: flex; gap: 10px; align-items: flex-start; } fieldset.rights .inline-check input { margin-top: 3px; }

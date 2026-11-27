@@ -555,7 +555,7 @@ def stored(aid):
 
 @app.get("/api/assessments/{aid}")
 def get_assessment(aid: str):
-    return FileResponse(stored(aid), media_type="application/json")
+    return FileResponse(stored(aid), media_type="application/json", headers={"Cache-Control": "no-cache"})   # a re-run replaces the file: always revalidate
 
 
 @app.get("/api/assessments/{aid}/summary")

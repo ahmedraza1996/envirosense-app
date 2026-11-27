@@ -190,7 +190,7 @@ export function ModelRegistry({ me }: { me: User }) {
         </table></div>
       </Card>
       {current && (
-        <div className="two-col" style={{ marginTop: 20 }}>
+        <div className="stack-gap" style={{ marginTop: 20 }}>
           <Card title={`Scorecard: ${current.label}`} subtitle={`Pass marks written ${reg.data?.criteria.written_utc ?? ""}, before the final runs.`}>
             {detail ? <ScorecardTable sc={detail.scorecard} /> : <p className="hint">Loading…</p>}
           </Card>
